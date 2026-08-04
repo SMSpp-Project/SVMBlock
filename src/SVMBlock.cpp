@@ -802,9 +802,15 @@ void SVMBlock::generate_objective( Configuration * objc )
 
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
-  // min 1/2 alpha^T Q alpha + q^T alpha, with the diagonal of Q halved into
-  // the quadratic coefficients of the QuadFunction and the strictly lower
-  // triangle of Q into its off-diagonal terms
+  /* max - q^T alpha - 1/2 alpha^T Q alpha, i.e., the Wolfe dual as it is
+   * customarily written, with the diagonal of Q halved into the quadratic
+   * coefficients of the QuadFunction and the strictly lower triangle of Q
+   * into its off-diagonal terms, everything negated since the objective is
+   * maximised. Writing it this way, rather than as the minimisation of the
+   * opposite, is what makes the *value* of the Objective the same in all the
+   * formulations, strong duality holding since the training problem is
+   * convex: a Solver on the dual and one on either primal then agree on a
+   * number, instead of on two numbers that happen to be opposite. */
   auto & K = get_K();
   const double rb = f_reg_bias ? 1 : 0;
   const double d = f_squared_loss ? 1 / ( 2 * f_C ) : 0;
@@ -813,8 +819,8 @@ void SVMBlock::generate_objective( Configuration * objc )
   for( Index k = 0 ; k < N ; ++k ) {
    const double sk = v_ds[ k ];
    const double Kkk = K[ std::size_t( v_di[ k ] ) * f_n + v_di[ k ] ];
-   triples[ k ] = std::make_tuple( & v_alpha_var[ k ] , v_dq[ k ] ,
-                                   ( sk * sk * ( Kkk + rb ) + d ) / 2 );
+   triples[ k ] = std::make_tuple( & v_alpha_var[ k ] , - v_dq[ k ] ,
+                                   - ( sk * sk * ( Kkk + rb ) + d ) / 2 );
    }
 
   v_off_diag_term off_diag;
@@ -825,13 +831,19 @@ void SVMBlock::generate_objective( Configuration * objc )
    for( Index l = 0 ; l < k ; ++l ) {
     const double Qkl = sk * v_ds[ l ] * ( K[ ik + v_di[ l ] ] + rb );
     if( Qkl )
-     off_diag.emplace_back( k , l , Qkl );
+     off_diag.emplace_back( k , l , - Qkl );
     }
    }
 
   f_obj.set_function( new QuadFunction( std::move( triples ) ,
                                         std::move( off_diag ) , 0 ) ,
                       eNoMod );
+
+  f_obj.set_sense( Objective::eMax , eNoMod );
+  set_objective( & f_obj , eNoMod );
+
+  AR |= HasObj;
+  return;
   }
  else {                      // the primal formulation - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
@@ -938,6 +950,62 @@ void SVMBlock::get_solution_from_abstract( void )
 
 /*--------------------------------------------------------------------------*/
 
+void SVMBlock::set_solution_in_abstract( void )
+{
+ if( ! ( AR & HasVar ) )  // there is nothing to write into
+  return;
+
+ if( ! ( AR & ( PrimalF | DecompF ) ) ) {  // the dual formulation - - - - - -
+                                           //- - - - - - - - - - - - - - - - -
+  for( Index k = 0 ; k < v_alpha_var.size() ; ++k )
+   v_alpha_var[ k ].set_value( k < v_alpha.size() ? v_alpha[ k ] : 0 );
+
+  return;
+  }
+
+ // both primal formulations need the weights, which only exist for the
+ // linear kernel, which is also the only one they exist for
+ auto w = get_w();
+
+ if( AR & DecompF ) {  // the decomposed formulation- - - - - - - - - - - - -
+                       //- - - - - - - - - - - - - - - - - - - - - - - - - - -
+  /* Every copy of the model is the model, and each sub-Block computes the
+   * slacks of its own samples out of it. */
+  for( auto sub : v_Block ) {
+   auto svm = static_cast< SVMBlock * >( sub );
+   svm->v_w_sol = w;
+   svm->f_b = f_b;
+   svm->set_solution_in_abstract();
+   }
+
+  return;
+  }
+
+ // the primal formulation - - - - - - - - - - - - - - - - - - - - - - - - - -
+ //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+ for( Index j = 0 ; j < f_m ; ++j )
+  v_w[ j ].set_value( w[ j ] );
+
+ f_b_var.set_value( f_b );
+
+ // the slacks are the smallest values that make the model feasible, which is
+ // what they are worth at any optimal solution of the primal
+ for( Index k = 0 ; k < v_xi.size() ; ++k ) {
+  const double * xi = get_x( v_di[ k ] );
+
+  double f = f_b;
+  for( Index j = 0 ; j < f_m ; ++j )
+   f += w[ j ] * xi[ j ];
+
+  v_xi[ k ].set_value( std::max( double( 0 ) ,
+                                 - v_dq[ k ] - v_ds[ k ] * f ) );
+  }
+
+ }  // end( SVMBlock::set_solution_in_abstract )
+
+/*--------------------------------------------------------------------------*/
+
 SVMBlock::c_doubleVec & SVMBlock::get_dual_coefficients( void ) const
 {
  if( v_dcoef.size() == f_n )
@@ -1040,7 +1108,8 @@ double SVMBlock::dual_objective( c_doubleVec & alpha ) const
    quad += d * alpha[ k ] * alpha[ k ];
   }
 
- return( quad / 2 + lin );
+ // the Wolfe dual is maximised, hence the opposite of the quadratic form
+ return( - ( quad / 2 + lin ) );
 
  }  // end( SVMBlock::dual_objective )
 

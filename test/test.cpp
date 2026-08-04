@@ -10,10 +10,11 @@
  * squared loss and of the regularised bias. The correctness of the solution
  * found by SMOSolver is asserted by strong duality, i.e., by checking that
  * the value of the primal at the model recovered out of the multipliers is
- * the opposite of the value of the dual, which is a joint check of the
- * solver, of the parametric map of the Block and of the recovery of the
- * model; the abstract representation is checked, in turn, against the same
- * value. The decomposed formulation is checked both structurally, against
+ * the value the Solver reports, which is a joint check of the solver, of the
+ * parametric map of the Block and of the recovery of the model; the abstract
+ * representation is checked, in turn, against the same value, which is the
+ * same number in every formulation since the Wolfe dual is written as the
+ * maximisation that strong duality makes equal to the primal. The decomposed formulation is checked both structurally, against
  * what a generic Lagrangian Solver requires, and numerically, by verifying
  * that at the optimum of the monolithic problem the consensus constraints are
  * satisfied and the sub-Block objectives add up to the monolithic value.
@@ -126,7 +127,7 @@ static double primal_value( const SVMBlock * svm )
  }  // end( primal_value )
 
 /*--------------------------------------------------------------------------*/
-/// trains \p svm with SMOSolver and returns the value of the dual
+/// trains \p svm with SMOSolver and returns the value of the training problem
 
 static double train( SVMBlock * svm , double tol = 1e-10 )
 {
@@ -358,17 +359,17 @@ int main( int argc , char ** argv )
     svm.set_reg_bias( rb );
     svm.load( 60 , 3 , X , y );
 
-    const double dual = train( & svm );
+    const double value = train( & svm );
     const std::string tag = std::string( sl ? "L2" : "L1" ) +
                             ( rb ? " reg bias" : " free bias" );
 
-    check_close( primal_value( & svm ) , - dual , 1e-4 ,
+    check_close( primal_value( & svm ) , value , 1e-4 ,
                  "strong duality, " + tag );
     check( accuracy( & svm ) == 1 , "separates the data, " + tag );
-    check_close( svm.dual_objective( svm.get_alphas() ) , dual , 1e-8 ,
+    check_close( svm.dual_objective( svm.get_alphas() ) , value , 1e-8 ,
                  "dual objective, " + tag );
 
-    check_abstract( & svm , SVMBlock::kWolfeDual , dual ,
+    check_abstract( & svm , SVMBlock::kWolfeDual , value ,
                     "abstract dual, " + tag );
     }
   }
@@ -387,16 +388,19 @@ int main( int argc , char ** argv )
    svm.set_squared_loss( sl );
    svm.load( 40 , 2 , X , y );
 
-   const double dual = train( & svm );
+   const double value = train( & svm );
    const std::string tag = std::string( sl ? "L2" : "L1" );
 
-   check_abstract( & svm , SVMBlock::kPrimal , - dual ,
+   check_abstract( & svm , SVMBlock::kPrimal , value ,
                    "abstract primal, " + tag );
 
-   // now that the abstract representation encodes the primal, the Solver has
-   // to report the value of *that* Objective, i.e., the opposite one
-   check_close( train( & svm ) , - dual , 1e-8 ,
-                "SMOSolver follows the generated formulation, " + tag );
+   // the value does not depend on the formulation, and the Solver leaves the
+   // model in the Variable, whence the Objective evaluates to that very same
+   // value without anybody filling them by hand
+   check_close( train( & svm ) , value , 1e-8 ,
+                "the value does not depend on the formulation, " + tag );
+   check_close( objective_value( & svm ) , value , 1e-6 ,
+                "SMOSolver writes the model in the primal Variable, " + tag );
    }
   }
 
@@ -424,10 +428,10 @@ int main( int argc , char ** argv )
    svm.set_C( 100 );
    svm.load( n , 2 , X , y );
 
-   const double dual = train( & svm );
+   const double value = train( & svm );
    const std::string tag = "kernel " + std::to_string( krn );
 
-   check_close( primal_value( & svm ) , - dual , 1e-4 ,
+   check_close( primal_value( & svm ) , value , 1e-4 ,
                 "strong duality, " + tag );
    check( accuracy( & svm ) == 1 , "separates the data, " + tag );
    }
@@ -450,13 +454,13 @@ int main( int argc , char ** argv )
     svm.set_reg_bias( rb );
     svm.load( 50 , 3 , X , y );
 
-    const double dual = train( & svm );
+    const double value = train( & svm );
     const std::string tag = std::string( sl ? "L2" : "L1" ) +
                             ( rb ? " reg bias" : " free bias" );
 
-    check_close( primal_value( & svm ) , - dual , 1e-4 ,
+    check_close( primal_value( & svm ) , value , 1e-4 ,
                  "strong duality, " + tag );
-    check_abstract( & svm , SVMBlock::kWolfeDual , dual ,
+    check_abstract( & svm , SVMBlock::kWolfeDual , value ,
                     "abstract dual, " + tag );
 
     double worst = 0;
@@ -483,8 +487,8 @@ int main( int argc , char ** argv )
   svm.set_epsilon( 0.01 );
   svm.load( 40 , 1 , X , y );
 
-  const double dual = train( & svm );
-  check_close( primal_value( & svm ) , - dual , 1e-4 ,
+  const double value = train( & svm );
+  check_close( primal_value( & svm ) , value , 1e-4 ,
                "strong duality, gaussian SVR" );
 
   double worst = 0;
@@ -509,7 +513,7 @@ int main( int argc , char ** argv )
   ref.set_C( 3 );
   ref.load( n , m , X , y );
 
-  const double primal = - train( & ref );
+  const double primal = train( & ref );
   const auto w = ref.get_w();
   const double b = ref.get_b();
 

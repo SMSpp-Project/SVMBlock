@@ -131,15 +131,14 @@ int SMOSolver::compute( bool changedvars )
  double v = 0;
  for( Index k = 0 ; k < f_N ; ++k )
   v += v_alpha[ k ] * ( v_G[ k ] + f_dq[ k ] );
- f_value = v / 2;
-
- /* What is reported has to be the value of the Objective of the SVMBlock,
-  * which is the dual only if that is the formulation its abstract
-  * representation encodes: for the primal ones it is the opposite, strong
-  * duality holding since the training problem is convex. */
- const int form = f_SVM->get_generated_formulation();
- if( ( form == SVMBlock::kPrimal ) || ( form == SVMBlock::kDecomposed ) )
-  f_value = - f_value;
+ /* The expression above is the one the SMO iteration minimises, i.e., the
+  * opposite of the Wolfe dual objective; what has to be reported is the value
+  * of the Objective of the SVMBlock, which is the optimal value of the
+  * training problem whichever formulation it encodes, the Wolfe dual being
+  * written as the maximisation whose value strong duality makes equal to the
+  * primal's. Hence the sign, once and for all, with no dependence on what the
+  * abstract representation happens to be. */
+ f_value = - v / 2;
 
  f_solved = true;
 
@@ -160,10 +159,9 @@ void SMOSolver::get_var_solution( Configuration * solc )
  auto alpha = v_alpha;  // the Solver keeps its own copy for a re-solve
  f_SVM->set_dual_solution( std::move( alpha ) , f_b );
 
- // if the abstract representation of the dual is there, fill it in as well
- if( auto av = f_SVM->get_static_variable_v< ColVariable >( "alpha" ) )
-  for( Index k = 0 ; k < f_N ; ++k )
-   (*av)[ k ].set_value( v_alpha[ k ] );
+ // the model is now in the SVMBlock; leave it also where any Solver working
+ // on the abstract representation would have left it, if there is one
+ f_SVM->set_solution_in_abstract();
 
  }  // end( SMOSolver::get_var_solution )
 

@@ -90,7 +90,7 @@ namespace SMSpp_di_unipi_it
  * <b>The dual formulation.</b> Dualising the constraints of the primal yields
  * the Wolfe dual
  * \f[
- *   \min_{ \alpha } \quad \frac{1}{2} \alpha^T Q \alpha + q^T \alpha
+ *   \max_{ \alpha } \quad - q^T \alpha - \frac{1}{2} \alpha^T Q \alpha
  *   \quad , \quad 0 \leq \alpha_k \leq u \quad , \quad
  *   [ \; s^T \alpha = 0 \; ]
  * \f]
@@ -101,11 +101,20 @@ namespace SMSpp_di_unipi_it
  *              \; + \; \delta_{ kl } \frac{ p - 1 }{ 2C }
  * \f]
  * and \f$ u = C \f$ for \f$ p = 1 \f$, \f$ u = + \infty \f$ for \f$ p = 2 \f$.
- * The dual is a convex quadratic program over a box with (at most) one linear
+ * The dual is a concave quadratic program over a box with (at most) one linear
  * equality constraint; its Hessian is dense, since it is the Gram matrix of
  * the kernel \f$ \mathcal{K} \f$ reweighted by the signs, but it never
  * involves the features explicitly, which is what makes nonlinear kernels
- * possible.
+ * possible: this is why it is the *only* formulation available for them, the
+ * primal ones requiring an explicit finite-dimensional feature map.
+ *
+ * Note that it is a *maximisation*, i.e., it is the Wolfe dual as it is
+ * customarily written rather than the minimisation of its opposite: strong
+ * duality holding since the training problem is convex, its optimal value is
+ * then the very same number as that of the primal, so that all the
+ * formulations agree on the value of the Objective of the SVMBlock. This is
+ * also what a Solver ignoring the abstract representation, such as SMOSolver,
+ * has to report.
  *
  * <b>The bias.</b> The equality constraint \f$ s^T \alpha = 0 \f$ of the dual
  * is the stationarity condition of the primal with respect to \f$ b \f$. If
@@ -404,8 +413,9 @@ class SVMBlock : public Block
  /// generates the abstract Objective of the SVMBlock
  /** Generates the (minimisation) Objective of the formulation that
   * generate_abstract_variables() has generated, which must therefore have
-  * been called beforehand: a QuadFunction for the dual, a DQuadFunction for
-  * the primal and, for the decomposed formulation, the Objective of each
+  * been called beforehand: a QuadFunction for the dual, which is *maximised*,
+  * a DQuadFunction for the primal, which is minimised, and, for the
+  * decomposed formulation, the Objective of each
   * sub-Block plus an *empty* one, which a Solver flattening the whole tree
   * needs to know the sense of the problem and a Lagrangian one tolerates
   * since it depends on no Variable. The Configuration is not used.
@@ -640,6 +650,21 @@ class SVMBlock : public Block
  void get_solution_from_abstract( void );
 
 /*--------------------------------------------------------------------------*/
+ /// writes the model into the abstract representation
+ /** The inverse of get_solution_from_abstract(): writes the model currently
+  * stored in the SVMBlock into the Variable of whichever formulation the
+  * abstract representation encodes, i.e., into the multipliers of the dual,
+  * into the weights, the bias and the slacks of the primal, or into those of
+  * every sub-Block of the decomposed one. It does nothing if no abstract
+  * representation exists.
+  *
+  * This is what a Solver that does not work on the abstract representation,
+  * such as SMOSolver, uses to leave its solution where any other Solver would
+  * have left it. */
+
+ void set_solution_in_abstract( void );
+
+/*--------------------------------------------------------------------------*/
  /// returns the N multipliers defining the model
 
  c_doubleVec & get_alphas( void ) const { return( v_alpha ); }
@@ -681,7 +706,10 @@ class SVMBlock : public Block
  virtual double predict( const double * x ) const = 0;
 
 /*--------------------------------------------------------------------------*/
- /// returns the value of the objective of the dual at the given multipliers
+ /// returns the value of the objective of the Wolfe dual at \p alpha
+ /** Returns the value of the objective of the Wolfe dual, which is
+  * *maximised*, at the given multipliers; at the optimal ones it is therefore
+  * the optimal value of the training problem itself. */
 
  double dual_objective( c_doubleVec & alpha ) const;
 
