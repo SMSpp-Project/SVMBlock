@@ -12,13 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `SVMBlock`, the abstract base class holding the data set, the
-  hyper-parameters, the kernel and both formulations of the training problem
+  hyper-parameters, the kernel and both the training problem and its Wolfe
+  dual, the latter written as the maximisation it customarily is, so that
+  the value of the Objective is the same number whichever is encoded
 
 - `SVCBlock` and `SVRBlock`, the classification and the regression variants
 
 - `SMOSolver`, the ad hoc Sequential Minimal Optimization solver for the dual
 
-- the decomposed formulation, i.e., the consensus reformulation over chunks of
-  samples that a generic Lagrangian, or Dantzig-Wolfe, Solver can attack
+- `make_consensus_Block()`, which assembles the training problem written as
+  one problem per chunk of samples tied by consensus constraints, i.e., the
+  structure a generic Lagrangian, or Dantzig-Wolfe, Solver attacks
 
 - netCDF and text serialization, and the tester

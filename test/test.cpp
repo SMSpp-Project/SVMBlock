@@ -498,49 +498,37 @@ int main( int argc , char ** argv )
   check( worst < 0.1 , "fits a sine, gaussian SVR" );
   }
 
- // the decomposed formulation - - - - - - - - - - - - - - - - - - - - - - - -
+ // the consensus rewriting - - - - - - - - - - - - - - - - - - - - - - - - -
 
- std::cout << "decomposed formulation" << std::endl;
+ std::cout << "consensus rewriting" << std::endl;
  {
   const Index n = 48 , m = 3 , P = 4;
 
   doubleVec X , y;
   make_svc_data( n , m , X , y , 5 );
 
-  // the reference: the same problem solved as a whole
+  // the reference: the same problem written as one Block
   SVCBlock ref;
   ref.set_kernel( SVMBlock::kLinear );
   ref.set_C( 3 );
   ref.load( n , m , X , y );
 
-  const double primal = train( & ref );
+  const double value = train( & ref );
   const auto w = ref.get_w();
   const double b = ref.get_b();
 
-  SVCBlock dec;
-  dec.set_kernel( SVMBlock::kLinear );
-  dec.set_C( 3 );
-  dec.load( n , m , X , y );
-
-  // the formulation, and the number of chunks it is decomposed into, are a
-  // Configuration matter, not part of the data of the SVMBlock
-  SimpleConfiguration< std::pair< int , int > >
-   cfg( { SVMBlock::kDecomposed , int( P ) } );
-
-  dec.generate_abstract_variables( & cfg );
-  dec.generate_abstract_constraints();
-  dec.generate_objective();
+  auto dec = make_consensus_Block( & ref , P );
 
   // the structure a generic Lagrangian Solver expects
-  check( ! dec.get_static_variable< ColVariable >( "w" ) &&
-         ! dec.get_static_variable_v< ColVariable >( "alpha" ) ,
+  check( ! dec->get_static_variable_v< ColVariable >( "w" ) &&
+         ! dec->get_static_variable_v< ColVariable >( "alpha" ) ,
          "no Variable in the father Block" );
-  check( dec.get_number_nested_Blocks() == P , "one sub-Block per chunk" );
-  check( dec.get_objective() &&
-         ( dec.get_objective()->get_num_active_var() == 0 ) ,
+  check( dec->get_number_nested_Blocks() == P , "one sub-Block per chunk" );
+  check( dec->get_objective() &&
+         ( dec->get_objective()->get_num_active_var() == 0 ) ,
          "the Objective of the father Block is empty" );
 
-  auto link = dec.get_static_constraint_v< FRowConstraint >( "link" );
+  auto link = dec->get_static_constraint_v< FRowConstraint >( "link" );
   check( link && ( link->size() == ( P - 1 ) * ( m + 1 ) ) ,
          "( P - 1 )( m + 1 ) consensus constraints" );
 
@@ -555,7 +543,7 @@ int main( int argc , char ** argv )
   Index tot = 0;
   bool both = true;
   for( Index p = 0 ; p < P ; ++p ) {
-   auto sub = dynamic_cast< SVMBlock * >( dec.get_nested_Block( p ) );
+   auto sub = dynamic_cast< SVMBlock * >( dec->get_nested_Block( p ) );
    tot += sub->get_NSamples();
    auto & ys = sub->get_y();
    if( std::count( ys.begin() , ys.end() , 1. ) == 0 ||
@@ -565,12 +553,12 @@ int main( int argc , char ** argv )
   check( tot == n , "the chunks partition the samples" );
   check( both , "every chunk sees both classes" );
 
-  // the reformulation is exact: at the optimum of the monolithic problem the
-  // consensus constraints are satisfied and the sub-Block objectives add up
-  // to the monolithic primal value
+  // the rewriting is exact: at the optimum of the problem written as one
+  // Block the consensus constraints are satisfied and the sub-Block
+  // objectives add up to its value
   double sum = 0;
   for( Index p = 0 ; p < P ; ++p ) {
-   auto sub = dynamic_cast< SVMBlock * >( dec.get_nested_Block( p ) );
+   auto sub = dynamic_cast< SVMBlock * >( dec->get_nested_Block( p ) );
    fill_primal( sub , w , b );
    sum += objective_value( sub );
    }
@@ -583,27 +571,39 @@ int main( int argc , char ** argv )
    }
 
   check( viol < 1e-12 , "the consensus constraints are satisfied" );
-  check_close( sum , primal , 1e-8 , "the reformulation is exact" );
+  check_close( sum , value , 1e-8 , "the rewriting is exact" );
 
-  dec.get_solution_from_abstract();
-  double dw = std::abs( dec.get_b() - b );
-  auto w2 = dec.get_w();
+  // every copy of the model is the model, so it is read out of any sub-Block
+  auto sub = dynamic_cast< SVMBlock * >( dec->get_nested_Block( 0 ) );
+  sub->get_solution_from_abstract();
+  double dw = std::abs( sub->get_b() - b );
+  auto w2 = sub->get_w();
   for( Index j = 0 ; j < m ; ++j )
    dw = std::max( dw , std::abs( w2[ j ] - w[ j ] ) );
-  check( dw < 1e-12 , "the model is recovered out of the sub-Block" );
+  check( dw < 1e-12 , "the model is read out of a sub-Block" );
+
+  delete dec;
 
   // a chunk of a single class would have an unbounded subproblem
   bool caught = false;
   try {
-   SVCBlock bad;
-   bad.set_kernel( SVMBlock::kLinear );
-   bad.load( n , m , X , y );
-   SimpleConfiguration< std::pair< int , int > >
-    bcfg( { SVMBlock::kDecomposed , int( n ) } );
-   bad.generate_abstract_variables( & bcfg );
+   auto bad = make_consensus_Block( & ref , n );
+   delete bad;
    }
   catch( const std::exception & e ) { caught = true; }
   check( caught , "single-class chunks are refused" );
+
+  // and no rewriting at all is possible without an explicit feature map
+  caught = false;
+  try {
+   SVCBlock nl;
+   nl.set_kernel( SVMBlock::kGaussian );
+   nl.load( n , m , X , y );
+   auto bad = make_consensus_Block( & nl , 2 );
+   delete bad;
+   }
+  catch( const std::exception & e ) { caught = true; }
+  check( caught , "a nonlinear kernel is refused" );
   }
 
  // the netCDF round trip - - - - - - - - - - - - - - - - - - - - - - - - - -

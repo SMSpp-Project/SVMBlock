@@ -14,31 +14,36 @@ for classification and the epsilon-insensitive and the squared
 epsilon-insensitive loss for regression, and both can either keep the bias out
 of the regularisation term or fold it into the weight vector.
 
-The `Block` holds the data set, the hyper-parameters and the kernel, and can
-generate either of two equivalent formulations of the training problem,
-selected through a `Configuration`:
+The `Block` holds the data set, the hyper-parameters and the kernel, and its
+abstract representation can encode either of two problems, selected through a
+`Configuration`:
 
-- the **primal**, a quadratic program in the weights, the bias and the
-  training errors, whose Hessian is *diagonal* and whose constraints are
-  linear, so that it is directly handled by any general-purpose quadratic
-  `Solver`; it is only available for the linear kernel, which is the only one
-  whose feature map is the identity;
+- the **training problem** itself, a quadratic program in the weights, the
+  bias and the training errors, whose Hessian is *diagonal* and whose
+  constraints are linear, so that it is directly handled by any
+  general-purpose quadratic `Solver`; it is only available for the linear
+  kernel, which is the only one whose feature map is the identity;
 
-- the **Wolfe dual**, a quadratic program in the multipliers over a box with
+- its **Wolfe dual**, a quadratic program in the multipliers over a box with
   (at most) one linear equality constraint, whose Hessian is the Gram matrix of
-  the kernel reweighted by the labels; it never involves the features
-  explicitly, which is what makes the nonlinear kernels possible;
+  the kernel reweighted by the labels. It never involves the features
+  explicitly, which is what makes the nonlinear kernels possible and what makes
+  it the *only* thing there is for them. It is written as the maximisation it
+  customarily is, so that strong duality, which holds since the training
+  problem is convex, makes the value of the `Objective` the very same number
+  whichever of the two is encoded.
 
-- the **decomposed** one, in which the samples are dealt out to a given number
-  of chunks, each chunk becomes a sub-`Block` holding the primal of its own
-  samples with its own copy of the model and with an even share of the
-  regularisation term, and the copies are tied together by linear *consensus*
-  constraints, the only ones the `SVMBlock` proper holds. This is exactly the
-  structure that `LagrangianDualSolver` requires, so that relaxing the
-  consensus constraints turns the training problem into one independent, and
-  much smaller, SVM training problem per chunk; equivalently, it is the
-  Dantzig-Wolfe decomposition of the training problem over the chunks. Like
-  the primal, it is only available for the linear kernel.
+Writing the training problem as one problem per chunk of samples, each with its
+own copy of the model and an even share of the regularisation term, the copies
+tied together by linear *consensus* constraints, is a way of *solving* it
+rather than a property of it: a data set has no structure of its own, and the
+number of chunks is a choice of whoever solves. It is therefore not something
+the `Block` encodes but something `make_consensus_Block()` assembles out of
+one, giving exactly the structure `LagrangianDualSolver` expects, so that
+relaxing the consensus constraints turns the training problem into one
+independent, and much smaller, SVM per chunk; equivalently, it is its
+Dantzig-Wolfe decomposition over the chunks. Like the primal, it needs the
+linear kernel.
 
 The linear, polynomial, gaussian, laplacian and sigmoid kernels are provided.
 Whichever formulation and `Solver` is used, the trained model is available in
@@ -74,9 +79,11 @@ to the SMO Algorithm for SVM Regression" *IEEE Transactions on Neural Networks*
 since a regression sample contributes two multipliers with opposite signs,
 whence the two sides of its insensitivity tube.
 
-Solving the decomposed formulation needs modules this one does not depend on:
-the `SVMBlock` suite of the [tests](https://gitlab.com/smspp/tests) repo does
-it with `LagrangianDualSolver`, `BundleSolver` and a `:MILPSolver`.
+Solving the consensus rewriting needs modules this one does not depend on: the
+`SVMBlock` suite of the [tests](https://gitlab.com/smspp/tests) repo does it
+with `LagrangianDualSolver`, `BundleSolver` and a `:MILPSolver`, and the
+`svm_solver` of the [tools](https://gitlab.com/smspp/tools) repo trains a model
+and performs the model selection around it.
 
 
 ## Getting started

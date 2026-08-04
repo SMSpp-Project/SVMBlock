@@ -140,41 +140,15 @@ namespace SMSpp_di_unipi_it
  *   \f$ \epsilon \f$-insensitive (\f$ p = 1 \f$) or squared
  *   \f$ \epsilon \f$-insensitive (\f$ p = 2 \f$) loss.
  *
- * <b>The decomposed formulation.</b> A third formulation is provided, which is
- * the primal reformulated so that it can be attacked by a Lagrangian, or
- * equivalently a Dantzig-Wolfe, decomposition. The samples are dealt out to
- * \f$ P \f$ chunks, each chunk is given its own copy \f$ ( w_p , b_p ) \f$ of
- * the model, the regularisation term is split evenly among the copies and the
- * copies are tied together by the *consensus* constraints
- * \f[
- *   \min_{ w , b , \xi } \quad \sum_{ p = 0 }^{ P - 1 } \Big[
- *     \frac{1}{2P} \big( \| w_p \|^2 \; [ \; + \; b_p^2 \; ] \big) + C
- *     \sum_{ k \in S_p } \xi_k^p \Big]
- * \f]
- * \f[
- *   s_k ( \langle w_p , x_{ i(k) } \rangle + b_p ) + \xi_k \geq r_k
- *   \quad , \quad \xi_k \geq 0 \quad , \quad k \in S_p
- * \f]
- * \f[
- *   w_p = w_{ p + 1 } \quad , \quad b_p = b_{ p + 1 }
- *   \quad , \quad p = 0 , \dots , P - 2
- * \f]
- * The reformulation is obviously exact, and it is written so that the SVMBlock
- * has no Variable of its own, one sub-Block per chunk, each one a SVMBlock of
- * the same type holding the primal of its own chunk, and only the consensus
- * constraints, which are linear and link the sub-Block: precisely the
- * structure that a generic Lagrangian Solver expects. Relaxing the consensus
- * constraints makes each chunk an independent, and much smaller, SVM training
- * problem with a linear term added to its objective.
- *
- * Two remarks on why it is written this way. First, the regularisation term is
- * *split*, rather than being left in one designated chunk: this keeps every
- * subproblem strongly convex, hence bounded, whereas a chunk carrying only its
- * loss would have an unbounded Lagrangian subproblem for all but the exactly
- * optimal multipliers. Second, the samples are dealt out to the chunks after
- * being sorted by target, so that each chunk sees samples of both classes:
- * a chunk whose dual signs are all equal has an unbounded subproblem in its
- * bias, unless the latter is regularised. Both conditions are checked.
+ * <b>Splitting the training problem.</b> The SVMBlock has no structure of its
+ * own to speak of: a data set is one thing, and its samples are not
+ * subproblems. Yet the primal can be *rewritten* as one training problem per
+ * chunk of samples, each with its own copy of the model and an even share of
+ * the regularisation term, the copies being tied together by linear consensus
+ * constraints; relaxing those makes each chunk an independent, and much
+ * smaller, SVM. That rewriting is a way of solving the problem rather than a
+ * property of it, so it is not something the SVMBlock encodes: it is
+ * assembled, out of a SVMBlock, by make_consensus_Block() [see].
  *
  * <b>The abstract representation.</b> Which of the three formulations is
  * generated is *not* part of the data of the SVMBlock, which encodes the
@@ -222,12 +196,11 @@ class SVMBlock : public Block
   };
 
 /*--------------------------------------------------------------------------*/
- /// the supported formulations of the training problem
+ /// which problem the abstract representation encodes
 
- enum svm_formulation {
-  kWolfeDual = 0 ,  ///< the dual in the multipliers, any kernel
-  kPrimal = 1 ,     ///< the primal in the weights, linear kernel only
-  kDecomposed = 2   ///< the primal split over sub-Block, linear kernel only
+ enum svm_problem {
+  kWolfeDual = 0 ,  ///< the Wolfe dual in the multipliers, any kernel
+  kPrimal = 1       ///< the training problem itself, linear kernel only
   };
 
 /*--------------------------------------------------------------------------*/
@@ -351,19 +324,13 @@ class SVMBlock : public Block
 
 /*--------------------------------------------------------------------------*/
  /// generates the abstract Variable of the SVMBlock
- /** Generates the abstract Variable of the SVMBlock. Which formulation is
-  * generated is dictated by \p stvv or, if that is nullptr, by the
-  * f_static_variables_Configuration of the BlockConfig, if it is set. Either
-  * of them can be
-  *
-  * - a SimpleConfiguration< int >, whose value \p wf is the formulation;
-  *
-  * - a SimpleConfiguration< std::pair< int , int > >, whose first value is
-  *   the formulation \p wf and whose second one is the number \f$ P \f$ of
-  *   chunks of the decomposed formulation, which the others ignore.
-  *
-  * With neither, \p wf defaults to kWolfeDual and \f$ P \f$ to 1. The
-  * admissible values of \p wf are those of svm_formulation:
+ /** Generates the abstract Variable of the SVMBlock. Which problem is encoded
+  * is dictated by the int value \p wf obtained as follows: if \p stvv is not
+  * nullptr and it is a SimpleConfiguration< int >, then \p wf is its value;
+  * otherwise, if the BlockConfig is set and its
+  * f_static_variables_Configuration is a SimpleConfiguration< int >, then
+  * \p wf is its value; otherwise \p wf is kWolfeDual. The admissible values
+  * are those of svm_problem:
   *
   * - kWolfeDual: one static Variable, the vector "alpha" of the N multipliers
   *   of the dual;
@@ -372,11 +339,6 @@ class SVMBlock : public Block
   *   scalar "b" of the bias and the vector "xi" of the N slacks. Only
   *   admissible for the linear kernel, since no other one has an explicit
   *   finite-dimensional feature map.
-  *
-  * - kDecomposed: no Variable at all, and one sub-Block per chunk, each one a
-  *   SVMBlock of the same type holding the primal of its own chunk with the
-  *   regularisation term divided by the number of chunks. Only admissible for
-  *   the linear kernel, for the same reason.
   *
   * All the Variable are continuous, and the bounds are Constraint rather than
   * being set into the Variable, see generate_abstract_constraints(). */
@@ -399,11 +361,6 @@ class SVMBlock : public Block
   * N FRowConstraint imposing
   * \f$ s_k ( \langle w , x_{ i(k) } \rangle + b ) + \xi_k \geq r_k \f$.
   *
-  * For the decomposed formulation these are the Constraint of each sub-Block
-  * plus, in the SVMBlock proper, the static group "link" of the
-  * \f$ ( P - 1 )( m + 1 ) \f$ FRowConstraint imposing the consensus, which are
-  * the only ones linking the sub-Block.
-  *
   * The Configuration is not used. */
 
  void generate_abstract_constraints( Configuration * stcc = nullptr )
@@ -414,11 +371,8 @@ class SVMBlock : public Block
  /** Generates the (minimisation) Objective of the formulation that
   * generate_abstract_variables() has generated, which must therefore have
   * been called beforehand: a QuadFunction for the dual, which is *maximised*,
-  * a DQuadFunction for the primal, which is minimised, and, for the
-  * decomposed formulation, the Objective of each
-  * sub-Block plus an *empty* one, which a Solver flattening the whole tree
-  * needs to know the sense of the problem and a Lagrangian one tolerates
-  * since it depends on no Variable. The Configuration is not used.
+  * and a DQuadFunction for the primal, which is minimised. The Configuration
+  * is not used.
   *
   * Note that the Hessian of the dual is dense, so that generating it costs
   * \f$ O( N^2 ) \f$ time and memory; this is unavoidable for a Solver working
@@ -487,12 +441,22 @@ class SVMBlock : public Block
 /*--------------------------------------------------------------------------*/
  /// sets the weight of the regularisation term
  /** Sets the weight of the regularisation term of the primal, which defaults
-  * to 1. It exists so that the decomposed formulation can divide the term
-  * evenly among the copies of the model it creates, and there is little
-  * reason to set it by hand: doing so changes the problem that the SVMBlock
-  * encodes, since the trade-off with the loss term is what \p C is for. */
+  * to 1. It exists so that make_consensus_Block() can divide the term evenly
+  * among the copies of the model it creates, and there is little reason to
+  * set it by hand: doing so changes the problem that the SVMBlock encodes,
+  * since the trade-off with the loss term is what \p C is for. */
 
  void set_reg_weight( double weight );
+
+/*--------------------------------------------------------------------------*/
+ /// makes \p to a SVMBlock with the same hyper-parameters as this one
+ /** Copies all the hyper-parameters of this SVMBlock into \p to, so that the
+  * two encode the same training problem save for the data set; the derived
+  * classes extend it with their own ones. It is what whoever builds a
+  * SVMBlock out of another one, e.g. over a subset of its samples, uses to
+  * avoid enumerating them by hand. */
+
+ virtual void copy_hyperparameters( SVMBlock * to ) const;
 
 /** @} ---------------------------------------------------------------------*/
 /*------------- METHODS FOR READING THE DATA OF THE SVMBlock ---------------*/
@@ -559,33 +523,20 @@ class SVMBlock : public Block
 
  bool get_reg_bias( void ) const { return( f_reg_bias ); }
 
- /// returns the formulation the abstract representation encodes
- /** Returns which of the values of svm_formulation the abstract
-  * representation encodes, or -1 if none has been generated yet. Note that
-  * this need not be the value of get_formulation(), which is only the
-  * default that generate_abstract_variables() uses when no Configuration
-  * dictates a different one. */
+ /// returns which problem the abstract representation encodes
+ /** Returns which of the values of svm_problem the abstract representation
+  * encodes, or -1 if none has been generated yet. */
 
- int get_generated_formulation( void ) const
+ int get_generated_problem( void ) const
  {
   if( ! ( AR & HasVar ) )
    return( -1 );
-  if( AR & DecompF )
-   return( kDecomposed );
   return( ( AR & PrimalF ) ? kPrimal : kWolfeDual );
   }
-
- /// returns the number of chunks the decomposed formulation was generated with
-
- Index get_num_chunk( void ) const { return( f_nchunk ); }
 
  /// returns the weight of the regularisation term
 
  double get_reg_weight( void ) const { return( f_reg_weight ); }
-
- /// returns the indices of the samples of chunk p of the decomposed one
-
- c_IndexVec & get_chunk( Index p ) const { return( v_chunk[ p ] ); }
 
  /// returns the half-width of the insensitivity tube, 0 if there is none
 
@@ -638,6 +589,18 @@ class SVMBlock : public Block
   * back into the SVMBlock. */
 
  void set_dual_solution( doubleVec && alpha , double b );
+
+/*--------------------------------------------------------------------------*/
+ /// sets the weights and the bias defining the model
+ /** Sets the "physical" solution of the SVMBlock in the form the primal has
+  * it, i.e., the m weights \p w and the bias \p b, rather than as the
+  * multipliers. This is what whoever obtains the model out of a primal, such
+  * as make_consensus_Block() out of any of its sub-Block, uses to write it
+  * back into the SVMBlock; the multipliers are then unknown, and
+  * get_alphas() returns them all zero. Only meaningful for the linear
+  * kernel, the only one the weights exist for. */
+
+ void set_primal_solution( doubleVec && w , double b );
 
 /*--------------------------------------------------------------------------*/
  /// reads the multipliers out of the abstract representation
@@ -740,22 +703,6 @@ class SVMBlock : public Block
  virtual void set_dual_data( void ) = 0;
 
 /*--------------------------------------------------------------------------*/
- /// copies the hyper-parameters of this SVMBlock into another one
- /** Copies the hyper-parameters of this SVMBlock into \p to, which is used to
-  * set up the sub-Block of the decomposed formulation; the derived classes
-  * extend it with their own ones. */
-
- virtual void copy_hyperparameters( SVMBlock * to ) const;
-
-/*--------------------------------------------------------------------------*/
- /// deals the samples out to the chunks of the decomposed formulation
- /** Fills v_chunk with the indices of the samples of each of the f_nchunk
-  * chunks, dealing them out round-robin after having sorted them by target so
-  * that each chunk sees samples of both classes. */
-
- void make_chunks( void );
-
-/*--------------------------------------------------------------------------*/
  /// recomputes the bias out of the current multipliers
  /** Recomputes the bias out of the current multipliers. If the bias is
   * regularised it is \f$ \sum_k s_k \alpha_k \f$, since it is then just one
@@ -828,8 +775,6 @@ class SVMBlock : public Block
  bool f_reg_bias = false;       ///< true if the bias is regularised
  double f_reg_weight = 1;       ///< the weight of the regularisation term
 
- Index f_nchunk = 1;            ///< the chunks the decomposed one was given
-
  doubleVec v_ds;             ///< the N signs s_k
  IndexVec v_di;              ///< the N sample indices i( k )
  doubleVec v_dq;             ///< the N linear coefficients q_k
@@ -853,9 +798,6 @@ class SVMBlock : public Block
  std::vector< LB0Constraint > v_xi_box;   ///< the N bounds on them (primal)
  std::vector< FRowConstraint > v_cons;    ///< the N constraints (primal)
 
- std::vector< IndexVec > v_chunk;         ///< the chunks (decomposed)
- std::vector< FRowConstraint > v_link;    ///< the consensus ones (decomposed)
-
  FRealObjective f_obj;                    ///< the objective
 
  unsigned char AR;           ///< bit-wise coded: what abstract is there
@@ -867,13 +809,56 @@ class SVMBlock : public Block
  static constexpr unsigned char HasCns = 4;
  ///< third bit of AR == 1 if the Constraint have been constructed
  static constexpr unsigned char PrimalF = 8;
- ///< fourth bit of AR == 1 if the generated formulation is the primal one
- static constexpr unsigned char DecompF = 16;
- ///< fifth bit of AR == 1 if the generated formulation is the decomposed one
+ ///< fourth bit of AR == 1 if the encoded problem is the primal one
 
 /*--------------------------------------------------------------------------*/
 
  };  // end( class( SVMBlock ) )
+
+/*--------------------------------------------------------------------------*/
+/*--------------------- FUNCTIONS OF THE SVMBlock GROUP --------------------*/
+/*--------------------------------------------------------------------------*/
+/// the training problem of \p svm written as \p P chunks tied together
+/** Returns a new Block encoding the very same training problem as \p svm,
+ * but written so that a Lagrangian, or equivalently a Dantzig-Wolfe,
+ * decomposition can attack it: the samples are dealt out to \p P chunks, each
+ * chunk becomes a sub-Block holding the primal of its own samples with its own
+ * copy \f$ ( w_p , b_p ) \f$ of the model and an even share of the
+ * regularisation term, and the copies are tied together by the *consensus*
+ * constraints
+ * \f[
+ *   w_p = w_{ p + 1 } \quad , \quad b_p = b_{ p + 1 }
+ *   \quad , \quad p = 0 , \dots , P - 2
+ * \f]
+ * which are the only Constraint the returned Block holds, it having no
+ * Variable of its own: precisely the structure a generic Lagrangian Solver
+ * expects, so that relaxing them makes each chunk an independent, and much
+ * smaller, SVM training problem with a linear term added to its objective.
+ *
+ * This is a way of *solving* the training problem rather than a property of
+ * it, which is why it is assembled here rather than being one more thing the
+ * SVMBlock encodes: a data set has no structure of its own, and \p P is a
+ * choice of whoever solves.
+ *
+ * Two remarks on why it is assembled this way. First, the regularisation term
+ * is *split*, rather than being left in one designated chunk: this keeps every
+ * subproblem strongly convex, hence bounded, whereas a chunk carrying only its
+ * loss would have an unbounded Lagrangian subproblem for all but the exactly
+ * optimal multipliers. Second, the samples are dealt out to the chunks after
+ * being sorted by target, so that each chunk sees samples of both classes: a
+ * chunk whose dual signs are all equal has an unbounded subproblem in its
+ * bias, unless the latter is regularised. Both conditions are checked, and
+ * exception is thrown if they cannot be met.
+ *
+ * Only the linear kernel is supported, the primal requiring an explicit
+ * finite-dimensional feature map. The returned Block owns its sub-Block and
+ * its Constraint, hence deleting it deletes them; \p svm is not touched, and
+ * the model is read back out of any of the sub-Block, all of which hold the
+ * same one at any solution satisfying the consensus constraints. */
+
+Block * make_consensus_Block( const SVMBlock * svm , Block::Index P );
+
+/*--------------------------------------------------------------------------*/
 
 /** @} end( group( SVMBlock_CLASSES ) ) */
 

@@ -118,6 +118,11 @@ class SVRBlock : public SVMBlock
  double get_epsilon( void ) const override { return( f_epsilon ); }
 
 /*--------------------------------------------------------------------------*/
+ /// extends SVMBlock::copy_hyperparameters() with the insensitivity tube
+
+ void copy_hyperparameters( SVMBlock * to ) const override;
+
+/*--------------------------------------------------------------------------*/
 /*------------------ METHODS FOR READING THE TRAINED MODEL -----------------*/
 /*--------------------------------------------------------------------------*/
 
@@ -137,11 +142,6 @@ class SVRBlock : public SVMBlock
  /// fills the parametric map of the regression problem
 
  void set_dual_data( void ) override;
-
-/*--------------------------------------------------------------------------*/
- /// extends SVMBlock::copy_hyperparameters() with the insensitivity tube
-
- void copy_hyperparameters( SVMBlock * to ) const override;
 
 /*--------------------------------------------------------------------------*/
  /// extends SVMBlock::deserialize_hyperparameters() with "Epsilon"

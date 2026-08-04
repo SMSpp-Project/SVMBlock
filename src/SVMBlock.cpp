@@ -18,6 +18,8 @@
 
 #include "SVMBlock.h"
 
+#include "AbstractBlock.h"
+
 #include "ColRowSolution.h"
 
 #include "ColVariableSolution.h"
@@ -369,6 +371,17 @@ void SVMBlock::set_reg_bias( bool reg )
 
 /*--------------------------------------------------------------------------*/
 
+void SVMBlock::copy_hyperparameters( SVMBlock * to ) const
+{
+ to->set_C( f_C );
+ to->set_kernel( f_kernel , f_gamma , f_degree , f_coef0 );
+ to->set_squared_loss( f_squared_loss );
+ to->set_reg_bias( f_reg_bias );
+
+ }  // end( SVMBlock::copy_hyperparameters )
+
+/*--------------------------------------------------------------------------*/
+
 void SVMBlock::set_reg_weight( double weight )
 {
  static const std::string _prfx = "SVMBlock::set_reg_weight: ";
@@ -382,16 +395,6 @@ void SVMBlock::set_reg_weight( double weight )
 
  }  // end( SVMBlock::set_reg_weight )
 
-/*--------------------------------------------------------------------------*/
-
-void SVMBlock::copy_hyperparameters( SVMBlock * to ) const
-{
- to->set_C( f_C );
- to->set_kernel( f_kernel , f_gamma , f_degree , f_coef0 );
- to->set_squared_loss( f_squared_loss );
- to->set_reg_bias( f_reg_bias );
-
- }  // end( SVMBlock::copy_hyperparameters )
 
 /*--------------------------------------------------------------------------*/
 /*------------------------------ THE KERNEL --------------------------------*/
@@ -516,146 +519,56 @@ void SVMBlock::generate_abstract_variables( Configuration * stvv )
 
  check_data();
 
- /* Which formulation is generated, and with how many chunks if it is the
-  * decomposed one, is a Configuration matter: it is not part of the training
-  * problem, hence it is not part of the data of the SVMBlock. */
+ /* Which problem the abstract representation encodes is a Configuration
+  * matter: it is not part of the training problem, hence it is not part of
+  * the data of the SVMBlock. */
  int wf = kWolfeDual;
- f_nchunk = 1;
 
  if( ( ! stvv ) && f_BlockConfig )
   stvv = f_BlockConfig->f_static_variables_Configuration;
 
  if( auto sci = dynamic_cast< SimpleConfiguration< int > * >( stvv ) )
   wf = sci->f_value;
- else
-  if( auto scp = dynamic_cast< SimpleConfiguration<
-                              std::pair< int , int > > * >( stvv ) ) {
-   wf = scp->f_value.first;
-   if( scp->f_value.second <= 0 )
-    throw( std::invalid_argument( _prfx +
-                                  "the chunks must be at least one" ) );
-   f_nchunk = scp->f_value.second;
-   }
 
- if( ( wf != kWolfeDual ) && ( wf != kPrimal ) && ( wf != kDecomposed ) )
-  throw( std::invalid_argument( _prfx + "unknown formulation" ) );
+ if( ( wf != kWolfeDual ) && ( wf != kPrimal ) )
+  throw( std::invalid_argument( _prfx + "unknown problem" ) );
 
- if( ( wf != kWolfeDual ) && ( f_kernel != kLinear ) )
-  throw( std::invalid_argument( _prfx + "the primal formulations are only "
-                                "available for the linear kernel" ) );
+ if( ( wf == kPrimal ) && ( f_kernel != kLinear ) )
+  throw( std::invalid_argument( _prfx + "the primal is only available for "
+                                "the linear kernel" ) );
 
  const Index N = get_NDual();
 
- if( wf == kWolfeDual ) {         // the dual formulation- - - - - - - - - - -
-                                  //- - - - - - - - - - - - - - - - - - - - -
+ if( wf == kWolfeDual ) {  // the Wolfe dual - - - - - - - - - - - - - - - - -
+                           //- - - - - - - - - - - - - - - - - - - - - - - - -
   v_alpha_var.resize( N );
   for( auto & ak : v_alpha_var )
    ak.set_type( ColVariable::kContinuous );
 
   add_static_variable( v_alpha_var , "alpha" );
   }
- else
-  if( wf == kPrimal ) {           // the primal formulation - - - - - - - - -
-                                  //- - - - - - - - - - - - - - - - - - - - -
-   AR |= PrimalF;
+ else {                    // the training problem itself- - - - - - - - - - -
+                           //- - - - - - - - - - - - - - - - - - - - - - - - -
+  AR |= PrimalF;
 
-   v_w.resize( f_m );
-   for( auto & wj : v_w )
-    wj.set_type( ColVariable::kContinuous );
-   add_static_variable( v_w , "w" );
+  v_w.resize( f_m );
+  for( auto & wj : v_w )
+   wj.set_type( ColVariable::kContinuous );
+  add_static_variable( v_w , "w" );
 
-   f_b_var.set_type( ColVariable::kContinuous );
-   add_static_variable( f_b_var , "b" );
+  f_b_var.set_type( ColVariable::kContinuous );
+  add_static_variable( f_b_var , "b" );
 
-   v_xi.resize( N );
-   for( auto & xk : v_xi )
-    xk.set_type( ColVariable::kContinuous );
-   add_static_variable( v_xi , "xi" );
-   }
-  else {                          // the decomposed formulation - - - - - - -
-                                  //- - - - - - - - - - - - - - - - - - - - -
-   AR |= DecompF;
-
-   make_chunks();
-
-   /* Each chunk becomes a sub-Block of the same type as this one, holding the
-    * primal of its own samples with the same hyper-parameters, save for the
-    * weight of the regularisation term, which is divided evenly among the
-    * chunks so that their sum is the original one. Note that the sub-Block
-    * are built through the factory, so that this works for any derived
-    * class. */
-   v_Block.resize( f_nchunk , nullptr );
-
-   for( Index p = 0 ; p < f_nchunk ; ++p ) {
-    auto sub = dynamic_cast< SVMBlock * >( new_Block( classname() , this ) );
-    if( ! sub )
-     throw( std::logic_error( _prfx + classname() +
-                              " is not in the Block factory" ) );
-    v_Block[ p ] = sub;
-
-    copy_hyperparameters( sub );
-    sub->set_reg_weight( f_reg_weight / f_nchunk );
-
-    auto & chunk = v_chunk[ p ];
-    doubleVec Xp( chunk.size() * f_m ) , yp( chunk.size() );
-
-    for( Index t = 0 ; t < chunk.size() ; ++t ) {
-     std::copy_n( get_x( chunk[ t ] ) , f_m , Xp.begin() + t * f_m );
-     yp[ t ] = v_y[ chunk[ t ] ];
-     }
-
-    sub->load( chunk.size() , f_m , std::move( Xp ) , std::move( yp ) );
-
-    /* A chunk whose dual signs are all equal has an unbounded Lagrangian
-     * subproblem in its bias, since the latter then only appears linearly and
-     * moving it in the right direction relaxes all the constraints at once.
-     * Regularising the bias makes the subproblem strongly convex in it, hence
-     * bounded, so only the other case has to be refused. */
-    if( ! f_reg_bias ) {
-     auto & s = sub->get_dual_signs();
-     if( std::all_of( s.begin() , s.end() ,
-                      [ &s ]( double sk ) { return( sk == s[ 0 ] ); } ) )
-      throw( std::invalid_argument(
-       _prfx + "chunk " + std::to_string( p ) + " has samples of one class "
-       "only, whose Lagrangian subproblem is unbounded in the bias: either "
-       "use fewer chunks or regularise the bias" ) );
-     }
-
-    SimpleConfiguration< int > primal( kPrimal );
-    sub->generate_abstract_variables( & primal );
-    }
-   }
+  v_xi.resize( N );
+  for( auto & xk : v_xi )
+   xk.set_type( ColVariable::kContinuous );
+  add_static_variable( v_xi , "xi" );
+  }
 
  AR |= HasVar;
 
  }  // end( SVMBlock::generate_abstract_variables )
 
-/*--------------------------------------------------------------------------*/
-
-void SVMBlock::make_chunks( void )
-{
- static const std::string _prfx = "SVMBlock::make_chunks: ";
-
- if( f_nchunk > f_n )
-  throw( std::invalid_argument( _prfx + "more chunks than samples" ) );
-
- /* The samples are dealt out round-robin after having been sorted by target,
-  * so that consecutive samples in the order end up in different chunks: for a
-  * classification problem this means that each chunk gets samples of both
-  * classes as long as there are at least f_nchunk of the least numerous one,
-  * which is what keeps its subproblem bounded. */
- IndexVec ord( f_n );
- std::iota( ord.begin() , ord.end() , 0 );
- std::stable_sort( ord.begin() , ord.end() ,
-                   [ this ]( Index i , Index j ) {
-                    return( v_y[ i ] < v_y[ j ] );
-                    } );
-
- v_chunk.assign( f_nchunk , IndexVec() );
- for( Index t = 0 ; t < f_n ; ++t )
-  v_chunk[ t % f_nchunk ].push_back( ord[ t ] );
-
- }  // end( SVMBlock::make_chunks )
 
 /*--------------------------------------------------------------------------*/
 
@@ -672,45 +585,6 @@ void SVMBlock::generate_abstract_constraints( Configuration * stcc )
                            ) );
 
  const Index N = get_NDual();
-
- if( AR & DecompF ) {        // the decomposed formulation - - - - - - - - - -
-                             //- - - - - - - - - - - - - - - - - - - - - - - -
-  for( auto sub : v_Block )
-   sub->generate_abstract_constraints();
-
-  // the consensus constraints, i.e., the only ones linking the sub-Block:
-  // w_p - w_{ p + 1 } = 0 for each feature, and b_p - b_{ p + 1 } = 0
-  v_link.resize( ( f_nchunk - 1 ) * ( f_m + 1 ) );
-
-  auto lnk = v_link.begin();
-  for( Index p = 0 ; p + 1 < f_nchunk ; ++p ) {
-   auto wp = v_Block[ p ]->get_static_variable_v< ColVariable >( "w" );
-   auto wq = v_Block[ p + 1 ]->get_static_variable_v< ColVariable >( "w" );
-   auto bp = v_Block[ p ]->get_static_variable< ColVariable >( "b" );
-   auto bq = v_Block[ p + 1 ]->get_static_variable< ColVariable >( "b" );
-
-   for( Index j = 0 ; j < f_m ; ++j , ++lnk ) {
-    v_coeff_pair coeffs( 2 );
-    coeffs[ 0 ] = std::make_pair( & (*wp)[ j ] , double( 1 ) );
-    coeffs[ 1 ] = std::make_pair( & (*wq)[ j ] , double( -1 ) );
-    lnk->set_both( 0 );
-    lnk->set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
-    }
-
-   v_coeff_pair coeffs( 2 );
-   coeffs[ 0 ] = std::make_pair( bp , double( 1 ) );
-   coeffs[ 1 ] = std::make_pair( bq , double( -1 ) );
-   lnk->set_both( 0 );
-   lnk->set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
-   ++lnk;
-   }
-
-  if( f_nchunk > 1 )
-   add_static_constraint( v_link , "link" );
-
-  AR |= HasCns;
-  return;
-  }
 
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
@@ -780,23 +654,6 @@ void SVMBlock::generate_objective( Configuration * objc )
  if( ! ( AR & HasVar ) )
   throw( std::logic_error( _prfx + "generate_abstract_variables not called"
                            ) );
-
- if( AR & DecompF ) {  // the decomposed formulation - - - - - - - - - - - - -
-                       //- - - - - - - - - - - - - - - - - - - - - - - - - - -
-  for( auto sub : v_Block )
-   sub->generate_objective();
-
-  /* The Objective is all in the sub-Block, since this Block has no Variable
-   * at all; yet an *empty* one is set here, because a Solver flattening the
-   * whole tree needs it to know the sense of the problem, while a Lagrangian
-   * Solver is fine with it as long as it depends on no Variable. */
-  f_obj.set_function( new LinearFunction() , eNoMod );
-  f_obj.set_sense( Objective::eMin , eNoMod );
-  set_objective( & f_obj , eNoMod );
-
-  AR |= HasObj;
-  return;
-  }
 
  const Index N = get_NDual();
 
@@ -895,6 +752,21 @@ void SVMBlock::set_dual_solution( doubleVec && alpha , double b )
 
 /*--------------------------------------------------------------------------*/
 
+void SVMBlock::set_primal_solution( doubleVec && w , double b )
+{
+ if( w.size() != f_m )
+  throw( std::invalid_argument( "SVMBlock::set_primal_solution: w has wrong "
+                                "size" ) );
+
+ v_w_sol = std::move( w );
+ v_alpha.assign( get_NDual() , 0 );
+ f_b = b;
+ v_dcoef.clear();
+
+ }  // end( SVMBlock::set_primal_solution )
+
+/*--------------------------------------------------------------------------*/
+
 void SVMBlock::get_solution_from_abstract( void )
 {
  static const std::string _prfx = "SVMBlock::get_solution_from_abstract: ";
@@ -903,29 +775,6 @@ void SVMBlock::get_solution_from_abstract( void )
   throw( std::logic_error( _prfx + "no abstract representation" ) );
 
  v_dcoef.clear();
-
- if( AR & DecompF ) {        // the decomposed formulation - - - - - - - - - -
-                             //- - - - - - - - - - - - - - - - - - - - - - - -
-  /* At optimality all the copies of the model agree, so any of them is the
-   * model; before that they do not, and their average is the natural choice,
-   * being the one the consensus constraints are violated the least by. */
-  v_w_sol.assign( f_m , 0 );
-  f_b = 0;
-
-  for( auto sub : v_Block ) {
-   auto wp = sub->get_static_variable_v< ColVariable >( "w" );
-   for( Index j = 0 ; j < f_m ; ++j )
-    v_w_sol[ j ] += (*wp)[ j ].get_value();
-   f_b += sub->get_static_variable< ColVariable >( "b" )->get_value();
-   }
-
-  for( auto & wj : v_w_sol )
-   wj /= f_nchunk;
-  f_b /= f_nchunk;
-
-  v_alpha.assign( get_NDual() , 0 );
-  return;
-  }
 
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
@@ -955,7 +804,7 @@ void SVMBlock::set_solution_in_abstract( void )
  if( ! ( AR & HasVar ) )  // there is nothing to write into
   return;
 
- if( ! ( AR & ( PrimalF | DecompF ) ) ) {  // the dual formulation - - - - - -
+ if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                                            //- - - - - - - - - - - - - - - - -
   for( Index k = 0 ; k < v_alpha_var.size() ; ++k )
    v_alpha_var[ k ].set_value( k < v_alpha.size() ? v_alpha[ k ] : 0 );
@@ -966,20 +815,6 @@ void SVMBlock::set_solution_in_abstract( void )
  // both primal formulations need the weights, which only exist for the
  // linear kernel, which is also the only one they exist for
  auto w = get_w();
-
- if( AR & DecompF ) {  // the decomposed formulation- - - - - - - - - - - - -
-                       //- - - - - - - - - - - - - - - - - - - - - - - - - - -
-  /* Every copy of the model is the model, and each sub-Block computes the
-   * slacks of its own samples out of it. */
-  for( auto sub : v_Block ) {
-   auto svm = static_cast< SVMBlock * >( sub );
-   svm->v_w_sol = w;
-   svm->f_b = f_b;
-   svm->set_solution_in_abstract();
-   }
-
-  return;
-  }
 
  // the primal formulation - - - - - - - - - - - - - - - - - - - - - - - - - -
  //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1172,8 +1007,6 @@ void SVMBlock::guts_of_destructor( void )
   * abstract representation when a new data set is loaded, in which case a
   * NBModification is issued immediately afterwards. */
 
- for( auto & cnst : v_link )
-  cnst.clear();
  for( auto & cnst : v_cons )
   cnst.clear();
  for( auto & cnst : v_xi_box )
@@ -1184,7 +1017,6 @@ void SVMBlock::guts_of_destructor( void )
 
  f_obj.clear();
 
- v_link.clear();
  v_cons.clear();
  v_xi_box.clear();
  v_box.clear();
@@ -1196,11 +1028,6 @@ void SVMBlock::guts_of_destructor( void )
  reset_static_constraints();
  reset_static_variables();
  reset_objective();
-
- for( auto sub : v_Block )  // the sub-Block of the decomposed formulation
-  delete sub;
- v_Block.clear();
- v_chunk.clear();
 
  v_K.clear();
  v_dcoef.clear();
@@ -1235,6 +1062,153 @@ void SVMBlock::print( std::ostream & output , char vlvl ) const
   }
 
  }  // end( SVMBlock::print )
+
+/*--------------------------------------------------------------------------*/
+/*--------------------- FUNCTIONS OF THE SVMBlock GROUP --------------------*/
+/*--------------------------------------------------------------------------*/
+
+Block * SMSpp_di_unipi_it::make_consensus_Block( const SVMBlock * svm ,
+                                                Block::Index P )
+{
+ static const std::string _prfx = "make_consensus_Block: ";
+
+ if( ! svm )
+  throw( std::invalid_argument( _prfx + "no SVMBlock given" ) );
+
+ if( ! P )
+  throw( std::invalid_argument( _prfx + "the chunks must be at least one" ) );
+
+ if( svm->get_kernel_type() != SVMBlock::kLinear )
+  throw( std::invalid_argument( _prfx + "only the linear kernel has the "
+                                "explicit feature map the primal needs" ) );
+
+ const Block::Index n = svm->get_NSamples();
+ const Block::Index m = svm->get_NFeatures();
+
+ if( P > n )
+  throw( std::invalid_argument( _prfx + "more chunks than samples" ) );
+
+ /* The samples are dealt out to the chunks round-robin after having been
+  * sorted by target, so that consecutive samples in the order end up in
+  * different chunks: for a classification problem this means that each chunk
+  * gets samples of both classes as long as there are at least P of the least
+  * numerous one, which is what keeps its subproblem bounded. */
+ std::vector< Block::Index > order( n );
+ std::iota( order.begin() , order.end() , Block::Index( 0 ) );
+
+ auto & y = svm->get_y();
+ std::stable_sort( order.begin() , order.end() ,
+                   [ &y ]( Block::Index i , Block::Index j ) {
+                    return( y[ i ] < y[ j ] );
+                    } );
+
+ std::vector< std::vector< Block::Index > > chunk( P );
+ for( Block::Index t = 0 ; t < n ; ++t )
+  chunk[ t % P ].push_back( order[ t ] );
+
+ // the father, which has no Variable of its own- - - - - - - - - - - - - - -
+
+ auto father = new AbstractBlock();
+
+ // one sub-Block per chunk - - - - - - - - - - - - - - - - - - - - - - - - -
+
+ for( Block::Index p = 0 ; p < P ; ++p ) {
+  auto sub = dynamic_cast< SVMBlock * >(
+                       Block::new_Block( svm->classname() , father ) );
+  if( ! sub ) {
+   delete father;
+   throw( std::logic_error( _prfx + svm->classname() +
+                            " is not in the Block factory" ) );
+   }
+
+  svm->copy_hyperparameters( sub );
+
+  /* The regularisation term is *split* among the chunks, rather than being
+   * left in one designated chunk, so that every subproblem stays strongly
+   * convex, hence bounded, whatever the multipliers. */
+  sub->set_reg_weight( 1 / double( P ) );
+
+  SVMBlock::doubleVec X( chunk[ p ].size() * m ) , yp( chunk[ p ].size() );
+
+  for( Block::Index t = 0 ; t < chunk[ p ].size() ; ++t ) {
+   std::copy_n( svm->get_x( chunk[ p ][ t ] ) , m , X.begin() + t * m );
+   yp[ t ] = y[ chunk[ p ][ t ] ];
+   }
+
+  sub->load( chunk[ p ].size() , m , std::move( X ) , std::move( yp ) );
+
+  /* A chunk whose dual signs are all equal has an unbounded Lagrangian
+   * subproblem in its bias, since the latter then only appears linearly and
+   * moving it in the right direction relaxes all the constraints at once.
+   * Regularising the bias makes the subproblem strongly convex in it, hence
+   * bounded, so only the other case has to be refused. */
+  if( ! svm->get_reg_bias() ) {
+   auto & sg = sub->get_dual_signs();
+   if( std::all_of( sg.begin() , sg.end() ,
+                    [ &sg ]( double sk ) { return( sk == sg[ 0 ] ); } ) ) {
+    delete father;
+    throw( std::invalid_argument(
+     _prfx + "chunk " + std::to_string( p ) + " has samples of one class "
+     "only, whose Lagrangian subproblem is unbounded in the bias: either "
+     "use fewer chunks or regularise the bias" ) );
+    }
+   }
+
+  SimpleConfiguration< int > primal( SVMBlock::kPrimal );
+  sub->generate_abstract_variables( & primal );
+  sub->generate_abstract_constraints();
+  sub->generate_objective();
+
+  father->add_nested_Block( sub );
+  }
+
+ // the consensus constraints, the only ones linking the sub-Block - - - - - -
+
+ auto link = new std::vector< FRowConstraint >( ( P - 1 ) * ( m + 1 ) );
+
+ auto lnk = link->begin();
+ for( Block::Index p = 0 ; p + 1 < P ; ++p ) {
+  auto sp = father->get_nested_Block( p );
+  auto sq = father->get_nested_Block( p + 1 );
+
+  auto wp = sp->get_static_variable_v< ColVariable >( "w" );
+  auto wq = sq->get_static_variable_v< ColVariable >( "w" );
+  auto bp = sp->get_static_variable< ColVariable >( "b" );
+  auto bq = sq->get_static_variable< ColVariable >( "b" );
+
+  for( Block::Index j = 0 ; j < m ; ++j , ++lnk ) {
+   LinearFunction::v_coeff_pair coeffs( 2 );
+   coeffs[ 0 ] = std::make_pair( & (*wp)[ j ] , double( 1 ) );
+   coeffs[ 1 ] = std::make_pair( & (*wq)[ j ] , double( -1 ) );
+   lnk->set_both( 0 );
+   lnk->set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
+   }
+
+  LinearFunction::v_coeff_pair coeffs( 2 );
+  coeffs[ 0 ] = std::make_pair( bp , double( 1 ) );
+  coeffs[ 1 ] = std::make_pair( bq , double( -1 ) );
+  lnk->set_both( 0 );
+  lnk->set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
+  ++lnk;
+  }
+
+ if( P > 1 )
+  father->add_static_constraint( *link , "link" );
+ else
+  delete link;
+
+ /* The Objective is all in the sub-Block, the father having no Variable at
+  * all; yet an *empty* one is set, because a Solver flattening the whole tree
+  * needs it to know the sense of the problem, while a Lagrangian one is fine
+  * with it as long as it depends on no Variable. */
+ auto obj = new FRealObjective();
+ obj->set_function( new LinearFunction() );
+ obj->set_sense( Objective::eMin , eNoMod );
+ father->set_objective( obj );
+
+ return( father );
+
+ }  // end( make_consensus_Block )
 
 /*--------------------------------------------------------------------------*/
 /*------------------------- End File SVMBlock.cpp --------------------------*/

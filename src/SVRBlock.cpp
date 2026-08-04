@@ -57,6 +57,17 @@ void SVRBlock::set_epsilon( double epsilon )
 
 /*--------------------------------------------------------------------------*/
 
+void SVRBlock::copy_hyperparameters( SVMBlock * to ) const
+{
+ SVMBlock::copy_hyperparameters( to );
+
+ if( auto svr = dynamic_cast< SVRBlock * >( to ) )
+  svr->set_epsilon( f_epsilon );
+
+ }  // end( SVRBlock::copy_hyperparameters )
+
+/*--------------------------------------------------------------------------*/
+
 void SVRBlock::deserialize_hyperparameters( const netCDF::NcGroup & group )
 {
  SVMBlock::deserialize_hyperparameters( group );
@@ -81,16 +92,6 @@ void SVRBlock::serialize_hyperparameters( netCDF::NcGroup & group ) const
 
 /*--------------------------------------------------------------------------*/
 /*--------------------------- PROTECTED METHODS ----------------------------*/
-/*--------------------------------------------------------------------------*/
-
-void SVRBlock::copy_hyperparameters( SVMBlock * to ) const
-{
- SVMBlock::copy_hyperparameters( to );
-
- if( auto svr = dynamic_cast< SVRBlock * >( to ) )
-  svr->set_epsilon( f_epsilon );
-
- }  // end( SVRBlock::copy_hyperparameters )
 
 /*--------------------------------------------------------------------------*/
 
