@@ -1,10 +1,82 @@
 # SVMBlock
 
-<!-- TODO: describe here, in a few paragraphs, what the module provides: the
-     :Block (and/or :Solver) classes it defines and the mathematical
-     structure they encode. -->
+Definition and implementation of the `SVMBlock` class, which implements the
+`Block` interface within the SMS++ framework for the training problem of a
+*Support Vector Machine* (SVM), together with the ad hoc `SMOSolver`.
 
-`SVMBlock` is a SMS++ :Block for ...
+Two concrete classes derive from the abstract `SVMBlock`: `SVCBlock`, for the
+*Support Vector Classifier*, i.e., the maximum-margin hyperplane separating the
+samples of two classes, and `SVRBlock`, for the *Support Vector Regression*,
+i.e., the model whose errors are not penalised inside a tube of given
+half-width around the targets. Both support the linear and the squared
+penalisation of the training errors, i.e., the hinge and the squared hinge loss
+for classification and the epsilon-insensitive and the squared
+epsilon-insensitive loss for regression, and both can either keep the bias out
+of the regularisation term or fold it into the weight vector.
+
+The `Block` holds the data set, the hyper-parameters and the kernel, and can
+generate either of two equivalent formulations of the training problem,
+selected through a `Configuration`:
+
+- the **primal**, a quadratic program in the weights, the bias and the
+  training errors, whose Hessian is *diagonal* and whose constraints are
+  linear, so that it is directly handled by any general-purpose quadratic
+  `Solver`; it is only available for the linear kernel, which is the only one
+  whose feature map is the identity;
+
+- the **Wolfe dual**, a quadratic program in the multipliers over a box with
+  (at most) one linear equality constraint, whose Hessian is the Gram matrix of
+  the kernel reweighted by the labels; it never involves the features
+  explicitly, which is what makes the nonlinear kernels possible;
+
+- the **decomposed** one, in which the samples are dealt out to a given number
+  of chunks, each chunk becomes a sub-`Block` holding the primal of its own
+  samples with its own copy of the model and with an even share of the
+  regularisation term, and the copies are tied together by linear *consensus*
+  constraints, the only ones the `SVMBlock` proper holds. This is exactly the
+  structure that `LagrangianDualSolver` requires, so that relaxing the
+  consensus constraints turns the training problem into one independent, and
+  much smaller, SVM training problem per chunk; equivalently, it is the
+  Dantzig-Wolfe decomposition of the training problem over the chunks. Like
+  the primal, it is only available for the linear kernel.
+
+The linear, polynomial, gaussian, laplacian and sigmoid kernels are provided.
+Whichever formulation and `Solver` is used, the trained model is available in
+the kernel expansion form, and for the linear kernel the weight vector is
+available as well.
+
+`SMOSolver` implements the `Solver` interface for a `SVMBlock` with the
+*Sequential Minimal Optimization* algorithm on the dual, i.e., the
+decomposition method that at each iteration optimizes over the smallest
+possible working set and therefore never needs the (dense) Hessian of the dual
+as a whole, which is what makes it the standard choice for training a SVM. It
+reads the data out of the physical representation of the `SVMBlock`, so it
+does not require the abstract one to be generated at all. The two-multiplier
+step is the one of
+
+J. C. Platt "Sequential Minimal Optimization: A Fast Algorithm for Training
+Support Vector Machines" *Microsoft Research technical report* MSR-TR-98-14,
+1998
+
+while the working set is selected, and the algorithm is stopped, with the two
+thresholds of
+
+S. S. Keerthi, S. K. Shevade, C. Bhattacharyya, K. R. K. Murthy "Improvements
+to Platt's SMO Algorithm for SVM Classifier Design" *Neural Computation* 13(3),
+637-649, 2001
+
+which for the regression case reduce to the thresholds of
+
+S. K. Shevade, S. S. Keerthi, C. Bhattacharyya, K. R. K. Murthy "Improvements
+to the SMO Algorithm for SVM Regression" *IEEE Transactions on Neural Networks*
+11(5), 1188-1193, 2000
+
+since a regression sample contributes two multipliers with opposite signs,
+whence the two sides of its insensitivity tube.
+
+Solving the decomposed formulation needs modules this one does not depend on:
+the `SVMBlock` suite of the [tests](https://gitlab.com/smspp/tests) repo does
+it with `LagrangianDualSolver`, `BundleSolver` and a `:MILPSolver`.
 
 
 ## Getting started

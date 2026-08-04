@@ -28,8 +28,9 @@
 *.gcno
 *.gcda
 
-# --- Test binaries ------------------------------------------
+# --- Test binaries and outputs ------------------------------
 test/SVMBlock_test
+test/*.nc4
 
 # --- CMake --------------------------------------------------
 build/

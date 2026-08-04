@@ -11,4 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- initial module skeleton generated from ModuleTemplate
+- `SVMBlock`, the abstract base class holding the data set, the
+  hyper-parameters, the kernel and both formulations of the training problem
+
+- `SVCBlock` and `SVRBlock`, the classification and the regression variants
+
+- `SMOSolver`, the ad hoc Sequential Minimal Optimization solver for the dual
+
+- the decomposed formulation, i.e., the consensus reformulation over chunks of
+  samples that a generic Lagrangian, or Dantzig-Wolfe, Solver can attack
+
+- netCDF and text serialization, and the tester
