@@ -51,6 +51,15 @@ using v_coeff_triple = DQuadFunction::v_coeff_triple;
 using v_off_diag_term = QuadFunction::v_off_diag_term;
 
 /*--------------------------------------------------------------------------*/
+/*----------------------------- STATIC MEMBERS -----------------------------*/
+/*--------------------------------------------------------------------------*/
+
+// register SVMBlockSolution in the Solution factory; SVMBlock itself is
+// abstract, hence it is the derived classes that are registered
+
+SMSpp_insert_in_factory_cpp_0( SVMBlockSolution );
+
+/*--------------------------------------------------------------------------*/
 /*----------------------------- CONSTANTS ----------------------------------*/
 /*--------------------------------------------------------------------------*/
 
@@ -282,6 +291,7 @@ Solution * SVMBlock::get_Solution( Configuration * solc , bool emptys )
  switch( config ? config->f_value : 0 ) {
   case( 1 ): sol = new RowConstraintSolution; break;
   case( 2 ): sol = new ColRowSolution; break;
+  case( 3 ): sol = new SVMBlockSolution; break;
   default:   sol = new ColVariableSolution;
   }
 
@@ -1209,6 +1219,167 @@ Block * SMSpp_di_unipi_it::make_consensus_Block( const SVMBlock * svm ,
  return( father );
 
  }  // end( make_consensus_Block )
+
+/*--------------------------------------------------------------------------*/
+/*------------------- METHODS OF THE CLASS SVMBlockSolution ----------------*/
+/*--------------------------------------------------------------------------*/
+
+void SVMBlockSolution::deserialize( const netCDF::NcGroup & group )
+{
+ auto read = []( const netCDF::NcGroup & group , const std::string & dim ,
+                 const std::string & var , SVMBlock::doubleVec & data ) {
+  auto nc_dim = group.getDim( dim );
+  auto nc_var = group.getVar( var );
+
+  if( nc_dim.isNull() || nc_var.isNull() ) {
+   data.clear();
+   return;
+   }
+
+  data.resize( nc_dim.getSize() );
+  nc_var.getVar( data.data() );
+  };
+
+ read( group , "NMultipliers" , "Multipliers" , v_alpha );
+ read( group , "NFeatures" , "Weights" , v_w );
+
+ f_b = 0;
+ ::deserialize( group , f_b , "Bias" , true );
+
+ }  // end( SVMBlockSolution::deserialize )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlockSolution::serialize( netCDF::NcGroup & group ) const
+{
+ // always call the method of the base class first
+ Solution::serialize( group );
+
+ const std::vector< std::size_t > start = { 0 };
+
+ if( ! v_alpha.empty() ) {
+  auto dim = group.addDim( "NMultipliers" , v_alpha.size() );
+  const std::vector< std::size_t > count = { v_alpha.size() };
+  ( group.addVar( "Multipliers" , netCDF::NcDouble() , dim ) ).putVar(
+                                           start , count , v_alpha.data() );
+  }
+
+ if( ! v_w.empty() ) {
+  auto dim = group.addDim( "NFeatures" , v_w.size() );
+  const std::vector< std::size_t > count = { v_w.size() };
+  ( group.addVar( "Weights" , netCDF::NcDouble() , dim ) ).putVar(
+                                               start , count , v_w.data() );
+  }
+
+ ::serialize( group , "Bias" , netCDF::NcDouble() , f_b );
+
+ }  // end( SVMBlockSolution::serialize )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlockSolution::read( const Block * block )
+{
+ auto svm = dynamic_cast< const SVMBlock * >( block );
+ if( ! svm )
+  throw( std::invalid_argument( "SVMBlockSolution::read: block is not a "
+                                "SVMBlock" ) );
+
+ v_alpha = svm->v_alpha;
+ v_w = svm->v_w_sol;
+ f_b = svm->f_b;
+
+ }  // end( SVMBlockSolution::read )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlockSolution::write( Block * block )
+{
+ auto svm = dynamic_cast< SVMBlock * >( block );
+ if( ! svm )
+  throw( std::invalid_argument( "SVMBlockSolution::write: block is not a "
+                                "SVMBlock" ) );
+
+ /* The model is written the way it was obtained: out of the weights if it
+  * comes from a primal, where the multipliers are unknown, out of the
+  * multipliers otherwise. */
+ if( ! v_w.empty() )
+  svm->set_primal_solution( SVMBlock::doubleVec( v_w ) , f_b );
+ else
+  if( ! v_alpha.empty() )
+   svm->set_dual_solution( SVMBlock::doubleVec( v_alpha ) , f_b );
+
+ svm->set_solution_in_abstract();
+
+ }  // end( SVMBlockSolution::write )
+
+/*--------------------------------------------------------------------------*/
+
+SVMBlockSolution * SVMBlockSolution::scale( double factor ) const
+{
+ auto sol = SVMBlockSolution::clone( true );
+
+ for( Block::Index i = 0 ; i < v_alpha.size() ; ++i )
+  sol->v_alpha[ i ] = v_alpha[ i ] * factor;
+
+ for( Block::Index i = 0 ; i < v_w.size() ; ++i )
+  sol->v_w[ i ] = v_w[ i ] * factor;
+
+ sol->f_b = f_b * factor;
+
+ return( sol );
+
+ }  // end( SVMBlockSolution::scale )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlockSolution::sum( const Solution * solution , double multiplier )
+{
+ auto sol = dynamic_cast< const SVMBlockSolution * >( solution );
+ if( ! sol )
+  throw( std::invalid_argument( "SVMBlockSolution::sum: solution is not a "
+                                "SVMBlockSolution" ) );
+
+ if( ! v_alpha.empty() ) {
+  if( v_alpha.size() != sol->v_alpha.size() )
+   throw( std::invalid_argument( "SVMBlockSolution::sum: incompatible "
+                                 "number of multipliers" ) );
+
+  for( Block::Index i = 0 ; i < v_alpha.size() ; ++i )
+   v_alpha[ i ] += sol->v_alpha[ i ] * multiplier;
+  }
+
+ if( ! v_w.empty() ) {
+  if( v_w.size() != sol->v_w.size() )
+   throw( std::invalid_argument( "SVMBlockSolution::sum: incompatible "
+                                 "number of weights" ) );
+
+  for( Block::Index i = 0 ; i < v_w.size() ; ++i )
+   v_w[ i ] += sol->v_w[ i ] * multiplier;
+  }
+
+ f_b += sol->f_b * multiplier;
+
+ }  // end( SVMBlockSolution::sum )
+
+/*--------------------------------------------------------------------------*/
+
+SVMBlockSolution * SVMBlockSolution::clone( bool empty ) const
+{
+ auto sol = new SVMBlockSolution();
+
+ if( empty ) {
+  sol->v_alpha.resize( v_alpha.size() );
+  sol->v_w.resize( v_w.size() );
+  }
+ else {
+  sol->v_alpha = v_alpha;
+  sol->v_w = v_w;
+  sol->f_b = f_b;
+  }
+
+ return( sol );
+
+ }  // end( SVMBlockSolution::clone )
 
 /*--------------------------------------------------------------------------*/
 /*------------------------- End File SVMBlock.cpp --------------------------*/

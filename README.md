@@ -48,7 +48,11 @@ linear kernel.
 The linear, polynomial, gaussian, laplacian and sigmoid kernels are provided.
 Whichever formulation and `Solver` is used, the trained model is available in
 the kernel expansion form, and for the linear kernel the weight vector is
-available as well.
+available as well. `SVMBlockSolution` saves that model, which is what outlives
+the training problem and is therefore what one writes to a file; it is not
+what `get_Solution()` returns by default, since a `Solver` working on the
+abstract representation, and the machinery combining solutions of sub-`Block`,
+need to see the latter instead.
 
 `SMOSolver` implements the `Solver` interface for a `SVMBlock` with the
 *Sequential Minimal Optimization* algorithm on the dual, i.e., the

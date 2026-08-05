@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SVMBlockSolution`, the Solution saving the trained model rather than the
+  abstract representation, which is what `get_Solution()` returns when the
+  Configuration asks for it and what makes the model writable to a file
+
 ## [0.1.0] - 2026-08-04
 
 ### Added

@@ -101,8 +101,8 @@ class SVRBlock : public SVMBlock
 
  /// extends SVMBlock::deserialize( netCDF::NcGroup )
  /** Extends SVMBlock::deserialize( netCDF::NcGroup ) with the scalar
-  * attribute "Epsilon", of type double, containing the half-width of the
-  * insensitivity tube; optional, with default 0.1. */
+  * variable "Epsilon", of type netCDF::NcDouble, containing the half-width
+  * of the insensitivity tube; optional, with default 0.1. */
 
  // the format is documented here, the reading is in
  // deserialize_hyperparameters()

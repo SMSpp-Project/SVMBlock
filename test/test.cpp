@@ -14,10 +14,14 @@
  * parametric map of the Block and of the recovery of the model; the abstract
  * representation is checked, in turn, against the same value, which is the
  * same number in every formulation since the Wolfe dual is written as the
- * maximisation that strong duality makes equal to the primal. The decomposed formulation is checked both structurally, against
- * what a generic Lagrangian Solver requires, and numerically, by verifying
- * that at the optimum of the monolithic problem the consensus constraints are
- * satisfied and the sub-Block objectives add up to the monolithic value.
+ * maximisation that strong duality makes equal to the primal. The consensus
+ * rewriting is checked both structurally, against what a generic Lagrangian
+ * Solver requires, and numerically, by verifying that at the optimum of the
+ * monolithic problem the consensus constraints are satisfied and the
+ * sub-Block objectives add up to the monolithic value. The Solution saving
+ * the trained model is checked by restoring it into a different Block and
+ * verifying that the two predict the same, both directly and after a netCDF
+ * round trip.
  *
  * \author Donato Meoli \n
  *         Dipartimento di Informatica \n
@@ -604,6 +608,78 @@ int main( int argc , char ** argv )
    }
   catch( const std::exception & e ) { caught = true; }
   check( caught , "a nonlinear kernel is refused" );
+  }
+
+ // the Solution saving the trained model - - - - - - - - - - - - - - - - - -
+
+ std::cout << "SVMBlockSolution" << std::endl;
+ {
+  doubleVec X , y;
+  make_svc_data( 40 , 3 , X , y , 7 );
+
+  SVCBlock svm;
+  svm.set_C( 4 );
+  svm.load( 40 , 3 , X , y );
+
+  const double value = train( & svm );
+
+  // what get_Solution() gives is dictated by the Configuration: the model
+  // only if it is asked for, the abstract representation by default
+  SimpleConfiguration< int > model_cfg( 3 );
+  auto sol = dynamic_cast< SVMBlockSolution * >(
+                                   svm.get_Solution( & model_cfg , false ) );
+  check( sol , "the Configuration asks for a SVMBlockSolution" );
+
+  auto other = svm.get_Solution( nullptr , true );
+  check( ! dynamic_cast< SVMBlockSolution * >( other ) ,
+         "the abstract representation is still the default" );
+  delete other;
+
+  if( sol ) {
+   check( ( sol->get_alphas() == svm.get_alphas() ) &&
+          ( sol->get_b() == svm.get_b() ) , "the model is saved" );
+
+   // the model is restored into a SVMBlock holding the same data set, which
+   // therefore predicts exactly the same way
+   SVCBlock copy;
+   copy.set_C( 4 );
+   copy.load( 40 , 3 , X , y );
+   sol->write( & copy );
+
+   double worst = 0;
+   for( Index i = 0 ; i < 40 ; ++i )
+    worst = std::max( worst , std::abs( copy.decision_function( svm.get_x( i )
+                                                                ) -
+                                        svm.decision_function( svm.get_x( i )
+                                                                ) ) );
+   check( worst < 1e-12 , "the restored model is the same model" );
+
+   // scale() and sum() are the algebra a Solution has to provide
+   auto half = sol->scale( 0.5 );
+   half->sum( sol , 0.5 );
+   check( ( half->get_alphas() == sol->get_alphas() ) &&
+          ( half->get_b() == sol->get_b() ) ,
+          "half a model plus half the same model is the model" );
+   delete half;
+
+   sol->serialize( "svmsolution.nc4" , true );
+   delete sol;
+   }
+
+  auto in = dynamic_cast< SVMBlockSolution * >(
+                                  Solution::deserialize( "svmsolution.nc4" ) );
+  check( in , "the netCDF file is read back as a SVMBlockSolution" );
+
+  if( in ) {
+   SVCBlock copy;
+   copy.set_C( 4 );
+   copy.load( 40 , 3 , X , y );
+   in->write( & copy );
+
+   check_close( primal_value( & copy ) , value , 1e-8 ,
+                "same model after the round trip" );
+   delete in;
+   }
   }
 
  // the netCDF round trip - - - - - - - - - - - - - - - - - - - - - - - - - -

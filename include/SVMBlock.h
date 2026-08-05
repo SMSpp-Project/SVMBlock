@@ -37,6 +37,8 @@
 
 #include "OneVarConstraint.h"
 
+#include "Solution.h"
+
 /*--------------------------------------------------------------------------*/
 /*------------------------------ NAMESPACE ---------------------------------*/
 /*--------------------------------------------------------------------------*/
@@ -165,11 +167,17 @@ namespace SMSpp_di_unipi_it
  * see get_dual_coefficients(), decision_function() and predict(); for the
  * linear kernel the weight vector is also available, see get_w(). */
 
+class SVMBlockSolution;  // forward declaration of SVMBlockSolution
+
+/*--------------------------------------------------------------------------*/
+
 class SVMBlock : public Block
 {
 /*----------------------- PUBLIC PART OF THE CLASS -------------------------*/
 
  public:
+
+ friend SVMBlockSolution;  ///< make SVMBlockSolution friend
 
 /*---------------------------- PUBLIC TYPES --------------------------------*/
 /** @name Public types
@@ -278,41 +286,42 @@ class SVMBlock : public Block
  /// extends Block::deserialize( netCDF::NcGroup )
  /** Extends Block::deserialize( netCDF::NcGroup ) to the specific format of
   * the SVMBlock. Besides the "type" attribute of any :Block, the group has
-  * the following dimensions, variables and attributes; the derived classes
-  * add their own, see their deserialize().
+  * the following dimensions and variables; the derived classes add their
+  * own, see their deserialize().
   *
   * - the dimension "NSamples", containing the number n of samples; mandatory;
   *
   * - the dimension "NFeatures", containing the number m of features;
   *   mandatory;
   *
-  * - the variable "X", of type double and indexed over "NSamples" and
-  *   "NFeatures", containing the samples; mandatory;
+  * - the variable "X", of type netCDF::NcDouble and indexed over "NSamples"
+  *   and "NFeatures", containing the samples; mandatory;
   *
-  * - the variable "Y", of type double and indexed over "NSamples", containing
-  *   the targets; mandatory;
+  * - the variable "Y", of type netCDF::NcDouble and indexed over "NSamples",
+  *   containing the targets; mandatory;
   *
-  * - the scalar attribute "C", of type double, containing the trade-off
-  *   parameter; optional, with default 1;
+  * - the scalar variable "C", of type netCDF::NcDouble, containing the
+  *   trade-off parameter; optional, with default 1;
   *
-  * - the scalar attribute "Kernel", of type int, containing one of the values
-  *   of kernel_type; optional, with default kLinear;
+  * - the scalar variable "Kernel", of type netCDF::NcInt, containing one of
+  *   the values of kernel_type; optional, with default kLinear;
   *
-  * - the scalar attribute "Gamma", of type double, containing the parameter
-  *   of the kernel, possibly one of the values of gamma_type; optional, with
-  *   default dGammaScale;
+  * - the scalar variable "Gamma", of type netCDF::NcDouble, containing the
+  *   parameter of the kernel, possibly one of the values of gamma_type;
+  *   optional, with default dGammaScale;
   *
-  * - the scalar attribute "Degree", of type int, containing the degree of the
-  *   polynomial kernel; optional, with default 3;
+  * - the scalar variable "Degree", of type netCDF::NcInt, containing the
+  *   degree of the polynomial kernel; optional, with default 3;
   *
-  * - the scalar attribute "Coef0", of type double, containing the constant
-  *   term of the polynomial and sigmoid kernels; optional, with default 0;
+  * - the scalar variable "Coef0", of type netCDF::NcDouble, containing the
+  *   constant term of the polynomial and sigmoid kernels; optional, with
+  *   default 0;
   *
-  * - the scalar attribute "SquaredLoss", of type int, nonzero if the slacks
-  *   are penalised quadratically; optional, with default 0;
+  * - the scalar variable "SquaredLoss", of type netCDF::NcInt, nonzero if
+  *   the slacks are penalised quadratically; optional, with default 0;
   *
-  * - the scalar attribute "RegBias", of type int, nonzero if the bias is
-  *   regularised together with the weights; optional, with default 0.
+  * - the scalar variable "RegBias", of type netCDF::NcInt, nonzero if the
+  *   bias is regularised together with the weights; optional, with default 0.
   *
   * Note that which formulation the abstract representation encodes is not
   * part of the format, since it is not part of the training problem: it is a
@@ -398,7 +407,14 @@ class SVMBlock : public Block
   * dictated by the int value of \p solc, if it is a SimpleConfiguration<
   * int > (or, failing that, of the solution Configuration of the
   * BlockConfig): 1 for a RowConstraintSolution, 2 for a ColRowSolution and
-  * anything else, the default, for a ColVariableSolution. */
+  * anything else, the default, for a ColVariableSolution.
+  *
+  * The value 3 rather asks for a SVMBlockSolution [see SVMBlockSolution.h],
+  * which saves the trained model instead of the abstract representation:
+  * that is what one writes to a file, since it is what outlives the training
+  * problem, but it is not what a Solver working on the abstract
+  * representation, or the machinery combining solutions of sub-Block, needs
+  * to see, whence it is not the default. */
 
  Solution * get_Solution( Configuration * solc = nullptr ,
                           bool emptys = true ) override;
@@ -617,9 +633,8 @@ class SVMBlock : public Block
  /** The inverse of get_solution_from_abstract(): writes the model currently
   * stored in the SVMBlock into the Variable of whichever formulation the
   * abstract representation encodes, i.e., into the multipliers of the dual,
-  * into the weights, the bias and the slacks of the primal, or into those of
-  * every sub-Block of the decomposed one. It does nothing if no abstract
-  * representation exists.
+  * or into the weights, the bias and the slacks of the primal. It does
+  * nothing if no abstract representation exists.
   *
   * This is what a Solver that does not work on the abstract representation,
   * such as SMOSolver, uses to leave its solution where any other Solver would
@@ -814,6 +829,180 @@ class SVMBlock : public Block
 /*--------------------------------------------------------------------------*/
 
  };  // end( class( SVMBlock ) )
+
+/*--------------------------------------------------------------------------*/
+/*------------------------ CLASS SVMBlockSolution --------------------------*/
+/*--------------------------------------------------------------------------*/
+/*--------------------------- GENERAL NOTES --------------------------------*/
+/*--------------------------------------------------------------------------*/
+/// a solution of a SVMBlock, i.e., a trained model
+/** The SVMBlockSolution class, derived from Solution, represents a solution
+ * of a SVMBlock, i.e., the *trained model*: what the SVMBlock keeps in its
+ * physical representation, that is the multipliers \f$ \alpha \f$, the
+ * weights \f$ w \f$ and the bias \f$ b \f$.
+ *
+ * This is deliberately not the same thing as the ColVariableSolution that a
+ * SVMBlock returns by default [see SVMBlock::get_Solution()], which saves the
+ * Variable of whichever formulation the abstract representation encodes: that
+ * one is what a Solver working on the abstract representation needs, and what
+ * the machinery combining solutions of sub-Block, such as that of a
+ * Lagrangian Solver, has to see. What is saved here is instead the model
+ * itself, the only thing that outlives the training problem, in the form that
+ * is independent of the formulation it was obtained from and that is
+ * therefore the one worth writing to a file.
+ *
+ * Which of the two vectors is nonempty depends on where the model comes from:
+ * the multipliers if it was obtained from a dual, the weights if it was
+ * obtained from a primal [see SVMBlock::set_primal_solution()]. Both are
+ * saved, so that the SVMBlockSolution is a faithful copy of the physical
+ * representation of the SVMBlock in either case. */
+
+class SVMBlockSolution : public Solution
+{
+/*----------------------- PUBLIC PART OF THE CLASS -------------------------*/
+
+ public:
+
+ friend SVMBlock;  ///< make SVMBlock friend
+
+/*------------- CONSTRUCTING AND DESTRUCTING SVMBlockSolution --------------*/
+/** @name Constructing and destructing SVMBlockSolution
+ *  @{ */
+
+ /// constructor of SVMBlockSolution, it has nothing to do
+
+ explicit SVMBlockSolution( void ) = default;
+
+/*--------------------------------------------------------------------------*/
+ // the netCDF::NcGroup methods below would otherwise hide the file-level
+ // ones of the base class
+
+ using Solution::serialize;
+ using Solution::deserialize;
+
+/*--------------------------------------------------------------------------*/
+ /// deserialize a SVMBlockSolution out of a netCDF::NcGroup
+ /** Deserialize a SVMBlockSolution out of a netCDF::NcGroup, which must have
+  * the format described in serialize(); each of the three components is
+  * optional, a missing one being taken as empty (or zero, for the bias). */
+
+ void deserialize( const netCDF::NcGroup & group ) override final;
+
+/*--------------------------------------------------------------------------*/
+ /// destructor of SVMBlockSolution: it is virtual, and empty
+
+ ~SVMBlockSolution() override = default;
+
+/** @} ---------------------------------------------------------------------*/
+/*------------ METHODS DESCRIBING THE BEHAVIOR OF A SVMBlockSolution -------*/
+/** @name Reading and writing the model
+ *  @{ */
+
+ /// read the model of the given SVMBlock
+
+ void read( const Block * block ) override final;
+
+/*--------------------------------------------------------------------------*/
+ /// write the model into the given SVMBlock
+ /** Writes the model into the given SVMBlock, which must have the same data
+  * set as the one it was read from, and into its abstract representation if
+  * one is constructed [see SVMBlock::set_solution_in_abstract()]. */
+
+ void write( Block * block ) override final;
+
+/*--------------------------------------------------------------------------*/
+ /// serialize a SVMBlockSolution into a netCDF::NcGroup
+ /** Serialize a SVMBlockSolution into a netCDF::NcGroup, with the following
+  * dimensions and variables:
+  *
+  * - the dimension "NMultipliers", containing the number N of multipliers,
+  *   and the variable "Multipliers", of type netCDF::NcDouble and indexed
+  *   over it, containing them; both are only present if the model is given
+  *   by the multipliers;
+  *
+  * - the dimension "NFeatures", containing the number m of features, and the
+  *   variable "Weights", of type netCDF::NcDouble and indexed over it,
+  *   containing the weights; both are only present if the model is given by
+  *   the weights;
+  *
+  * - the scalar variable "Bias", of type netCDF::NcDouble, containing the
+  *   bias. */
+
+ void serialize( netCDF::NcGroup & group ) const override final;
+
+/** @} ---------------------------------------------------------------------*/
+/*------------ METHODS FOR HANDLING THE "IDENTITY" OF THE Solution ---------*/
+/** @name Handling the "identity" of the SVMBlockSolution
+ *  @{ */
+
+ /// returns a scaled copy of this SVMBlockSolution
+
+ [[nodiscard]] SVMBlockSolution * scale( double factor ) const override final;
+
+/*--------------------------------------------------------------------------*/
+ /// adds a multiple of the given SVMBlockSolution to this one
+
+ void sum( const Solution * solution , double multiplier ) override final;
+
+/*--------------------------------------------------------------------------*/
+ /// returns a copy of this SVMBlockSolution, possibly an empty one
+
+ [[nodiscard]] SVMBlockSolution * clone( bool empty = false )
+  const override final;
+
+/** @} ---------------------------------------------------------------------*/
+/*------------------------ METHODS FOR READING THE MODEL -------------------*/
+/** @name Reading the model
+ *  @{ */
+
+ /// returns the multipliers of the model, if it is given by them
+
+ [[nodiscard]] SVMBlock::c_doubleVec & get_alphas( void ) const {
+  return( v_alpha );
+  }
+
+/*--------------------------------------------------------------------------*/
+ /// returns the weights of the model, if it is given by them
+
+ [[nodiscard]] SVMBlock::c_doubleVec & get_w( void ) const {
+  return( v_w );
+  }
+
+/*--------------------------------------------------------------------------*/
+ /// returns the bias of the model
+
+ [[nodiscard]] double get_b( void ) const { return( f_b ); }
+
+/** @} ---------------------------------------------------------------------*/
+/*--------------------- PROTECTED PART OF THE CLASS ------------------------*/
+
+ protected:
+
+/*--------------------------- PROTECTED METHODS ----------------------------*/
+ /// print the SVMBlockSolution
+
+ void print( std::ostream & output ) const override final {
+  output << "SVMBlockSolution [" << this << "]: " << v_alpha.size()
+         << " multipliers and " << v_w.size() << " weights" << std::endl;
+  }
+
+/*--------------------- PROTECTED FIELDS OF THE CLASS ----------------------*/
+
+ SVMBlock::doubleVec v_alpha;   ///< the multipliers of the model
+ SVMBlock::doubleVec v_w;       ///< the weights of the model
+ double f_b = 0;                ///< the bias of the model
+
+/*----------------------- PRIVATE PART OF THE CLASS ------------------------*/
+
+ private:
+
+/*---------------------------- PRIVATE METHODS -----------------------------*/
+
+ SMSpp_insert_in_factory_h;  // insert SVMBlockSolution in the factory
+
+/*--------------------------------------------------------------------------*/
+
+ };  // end( class( SVMBlockSolution ) )
 
 /*--------------------------------------------------------------------------*/
 /*--------------------- FUNCTIONS OF THE SVMBlock GROUP --------------------*/
