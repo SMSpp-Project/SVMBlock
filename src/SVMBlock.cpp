@@ -32,6 +32,8 @@
 
 #include "RowConstraintSolution.h"
 
+#include <ff/parallel_for.hpp>
+
 #include <algorithm>
 
 #include <cmath>
@@ -39,6 +41,8 @@
 #include <iomanip>
 
 #include <numeric>
+
+#include <thread>
 
 /*--------------------------------------------------------------------------*/
 /*------------------------- NAMESPACE AND USING ----------------------------*/
@@ -65,6 +69,12 @@ SMSpp_insert_in_factory_cpp_0( SVMBlockSolution );
 
 /// the relative tolerance within which a multiplier is at one of its bounds
 static constexpr double dBndEps = 1e-8;
+
+/*--------------------------------------------------------------------------*/
+/// the size of the data set above which the Gram matrix is computed in
+/// parallel, below which the threads would cost more than they save
+
+static constexpr SVMBlock::Index dParallelK = 256;
 
 /*--------------------------------------------------------------------------*/
 /*-------------------------- OTHER INITIALIZATIONS -------------------------*/
@@ -511,14 +521,35 @@ SVMBlock::c_doubleVec & SVMBlock::get_K( void ) const
 
  v_K.resize( std::size_t( f_n ) * f_n );
 
- for( Index i = 0 ; i < f_n ; ++i ) {
-  v_K[ std::size_t( i ) * f_n + i ] = kernel( i , i );
-  for( Index j = i + 1 ; j < f_n ; ++j ) {
-   const double kij = kernel( i , j );
-   v_K[ std::size_t( i ) * f_n + j ] = kij;
-   v_K[ std::size_t( j ) * f_n + i ] = kij;
+ // the value of gamma derived from the data is resolved here, and not
+ // concurrently by the threads below
+ if( f_kernel != kLinear )
+  get_gamma();
+
+ /* One row per iteration, each writing the upper part of its own row and the
+  * corresponding part of the symmetric column, so that every entry is written
+  * exactly once. The rows have very different lengths, whence the dynamic
+  * scheduling; a small data set is not worth a thread, and is done here. */
+ const std::size_t n = f_n;
+ auto row = [ this , n ]( const long i ) {
+  v_K[ std::size_t( i ) * n + i ] = kernel( Index( i ) , Index( i ) );
+  for( std::size_t j = i + 1 ; j < n ; ++j ) {
+   const double kij = kernel( Index( i ) , Index( j ) );
+   v_K[ std::size_t( i ) * n + j ] = kij;
+   v_K[ j * n + i ] = kij;
    }
+  };
+
+ const unsigned nthreads = ( f_n >= dParallelK )
+  ? std::max< unsigned >( 1 , std::thread::hardware_concurrency() ) : 1;
+
+ if( nthreads > 1 ) {
+  ff::ParallelFor pf( nthreads );
+  pf.parallel_for( 0 , f_n , 1 , 1 , row , nthreads );
   }
+ else
+  for( Index i = 0 ; i < f_n ; ++i )
+   row( i );
 
  return( v_K );
 
