@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   abstract representation, which is what `get_Solution()` returns when the
   Configuration asks for it and what makes the model writable to a file
 
+### Fixed
+
+- the conventional values of gamma, which are derived from the data set, were
+  derived again at each of the O( n^2 ) entries of the Gram matrix
+
 ## [0.1.0] - 2026-08-04
 
 ### Added

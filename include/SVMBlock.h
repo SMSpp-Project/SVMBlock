@@ -795,6 +795,8 @@ class SVMBlock : public Block
  doubleVec v_dq;             ///< the N linear coefficients q_k
 
  mutable doubleVec v_K;      ///< the cached n x n Gram matrix
+ mutable double f_gamma_res = 0;
+ ///< the cached value of gamma derived from the data, 0 if not derived yet
 
  doubleVec v_alpha;          ///< the N multipliers of the model
  doubleVec v_w_sol;          ///< the m weights of the model, if primal

@@ -355,7 +355,8 @@ void SVMBlock::set_kernel( int type , double gamma , int degree ,
  f_degree = degree;
  f_coef0 = coef0;
 
- v_K.clear();  // the Gram matrix, if any, is no longer the right one
+ v_K.clear();       // the Gram matrix, if any, is no longer the right one
+ f_gamma_res = 0;   // and neither is the gamma derived from the data
 
  }  // end( SVMBlock::set_kernel )
 
@@ -426,6 +427,13 @@ double SVMBlock::get_gamma( void ) const
  if( ! f_m )
   throw( std::logic_error( "SVMBlock::get_gamma: no data set is loaded" ) );
 
+ /* The conventional values of gamma are derived from the data set, hence
+  * they are the same at every call: they are computed once and cached, since
+  * this is called for each of the O( n^2 ) entries of the Gram matrix and
+  * deriving it costs O( n m ). */
+ if( f_gamma_res > 0 )
+  return( f_gamma_res );
+
  if( f_gamma == dGammaScale ) {
   // 1 / ( m * Var( X ) ), with the variance taken over all the entries
   const double sz = double( v_X.size() );
@@ -440,10 +448,11 @@ double SVMBlock::get_gamma( void ) const
   var /= sz;
 
   if( var > 0 )
-   return( 1 / ( f_m * var ) );
+   return( f_gamma_res = 1 / ( f_m * var ) );
   }
 
- return( 1 / double( f_m ) );  // dGammaAuto, or a degenerate data set
+ return( f_gamma_res = 1 / double( f_m ) );  // dGammaAuto, or a
+                                             // degenerate data set
 
  }  // end( SVMBlock::get_gamma )
 
@@ -1041,6 +1050,7 @@ void SVMBlock::guts_of_destructor( void )
 
  v_K.clear();
  v_dcoef.clear();
+ f_gamma_res = 0;
 
  AR = 0;
 
