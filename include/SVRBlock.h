@@ -109,8 +109,15 @@ class SVRBlock : public SVMBlock
 
 /*--------------------------------------------------------------------------*/
  /// sets the half-width of the insensitivity tube, which must be nonnegative
+ /** Sets the half-width \f$ \epsilon \f$ of the insensitivity tube, which
+  * must be nonnegative. It only enters the linear coefficients \f$ q_k \f$ of
+  * the parametric map, i.e., the linear part of the Objective of the dual and
+  * the sides of the constraints of the primal, hence the change is a local
+  * one; see the comments to the methods modifying a SVMBlock for the meaning
+  * of the two ModParam. */
 
- void set_epsilon( double epsilon );
+ void set_epsilon( double epsilon , ModParam issueMod = eNoBlck ,
+                   ModParam issueAMod = eNoBlck );
 
 /*--------------------------------------------------------------------------*/
  /// returns the half-width of the insensitivity tube

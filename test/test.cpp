@@ -45,6 +45,8 @@
 
 #include <cmath>
 
+#include <functional>
+
 #include <iostream>
 
 #include <random>
@@ -322,6 +324,115 @@ static double accuracy( const SVMBlock * svm )
  return( double( right ) / n );
 
  }  // end( accuracy )
+
+/*--------------------------------------------------------------------------*/
+/// solves again with an already attached Solver, returning the value
+
+static double resolve( Solver * solver )
+{
+ const int status = solver->compute();
+ if( status != Solver::kOK )
+  throw( std::logic_error( "SMOSolver did not converge" ) );
+
+ solver->get_var_solution();
+ return( solver->get_var_value() );
+
+ }  // end( resolve )
+
+/*--------------------------------------------------------------------------*/
+/// trains a fresh SVMBlock holding the very same training problem as \p svm
+/** Trains, from scratch and with a Solver of its own, a new SVMBlock with the
+ * same data set and the same hyper-parameters as \p svm: this is the value
+ * that whoever re-optimizes \p svm after a change has to agree with. */
+
+static double from_scratch( const SVMBlock * svm )
+{
+ auto ref = dynamic_cast< SVMBlock * >(
+                                  Block::new_Block( svm->classname() ) );
+
+ svm->copy_hyperparameters( ref );
+ ref->load( svm->get_NSamples() , svm->get_NFeatures() , svm->get_X() ,
+            svm->get_y() );
+
+ const double value = train( ref );
+
+ delete ref;
+ return( value );
+
+ }  // end( from_scratch )
+
+/*--------------------------------------------------------------------------*/
+/// checks that a change is followed by the abstract representation
+/** Builds two SVMBlock of the given kind holding the same data set, and
+ * subjects both to \p change: the first one after having generated its
+ * abstract representation of the given formulation, so that the latter has to
+ * be updated, the second one before, so that it is generated already changed.
+ * The two must then encode the same problem, which is checked on the value of
+ * the Objective at the optimal model and on the sides of the constraints. */
+
+static void check_change( const std::string & kind , int form ,
+                          const doubleVec & X , const doubleVec & y ,
+                          Index n , Index m ,
+                          const std::function< void( SVMBlock * ) > & change ,
+                          const std::string & what )
+{
+ auto a = dynamic_cast< SVMBlock * >( Block::new_Block( kind ) );
+ auto b = dynamic_cast< SVMBlock * >( Block::new_Block( kind ) );
+
+ a->load( n , m , X , y );
+ b->load( n , m , X , y );
+
+ SimpleConfiguration< int > cfg( form );
+
+ a->generate_abstract_variables( & cfg );
+ a->generate_abstract_constraints();
+ a->generate_objective();
+
+ change( a );  // the abstract representation has to follow
+
+ change( b );  // while here it is generated once the change is done
+ b->generate_abstract_variables( & cfg );
+ b->generate_abstract_constraints();
+ b->generate_objective();
+
+ // the optimal model of the changed problem, which both must agree on
+ const double value = train( b );
+ a->set_dual_solution( doubleVec( b->get_alphas() ) , b->get_b() );
+
+ a->set_solution_in_abstract();
+ b->set_solution_in_abstract();
+
+ check_close( objective_value( a ) , value , 1e-6 ,
+              what + ": the Objective is the optimal value" );
+ check_close( objective_value( a ) , objective_value( b ) , 1e-9 ,
+              what + ": the same Objective as if generated anew" );
+
+ bool ok = ( a->get_static_constraints().size() ==
+             b->get_static_constraints().size() );
+
+ if( form == SVMBlock::kWolfeDual ) {
+  auto ba = a->get_static_constraint_v< LB0Constraint >( "box" );
+  auto bb = b->get_static_constraint_v< LB0Constraint >( "box" );
+  ok &= ba && bb && ( ba->size() == bb->size() );
+  if( ok )
+   for( Index k = 0 ; k < ba->size() ; ++k )
+    ok &= ( (*ba)[ k ].get_rhs() == (*bb)[ k ].get_rhs() );
+  }
+ else {
+  auto ca = a->get_static_constraint_v< FRowConstraint >( "cons" );
+  auto cb = b->get_static_constraint_v< FRowConstraint >( "cons" );
+  ok &= ca && cb && ( ca->size() == cb->size() );
+  if( ok )
+   for( Index k = 0 ; k < ca->size() ; ++k )
+    ok &= ( (*ca)[ k ].get_lhs() == (*cb)[ k ].get_lhs() );
+  }
+
+ check( ok , what + ": the same Constraint as if generated anew" );
+
+ delete a;
+ delete b;
+
+ }  // end( check_change )
 
 /*--------------------------------------------------------------------------*/
 /*-------------------------------- main() ----------------------------------*/
@@ -608,6 +719,204 @@ int main( int argc , char ** argv )
    }
   catch( const std::exception & e ) { caught = true; }
   check( caught , "a nonlinear kernel is refused" );
+  }
+
+ // changing the training problem- - - - - - - - - - - - - - - - - - - - - - -
+
+ std::cout << "re-optimization" << std::endl;
+ {
+  const Index n = 50 , m = 3;
+  doubleVec X , y;
+  make_svc_data( n , m , X , y , 13 );
+
+  /* The Solver stays attached across the changes, hence it has to make sense
+   * of the Modification the SVMBlock issues: whatever it does, it has to
+   * agree with a training done from scratch. */
+  SVCBlock svm;
+  svm.load( n , m , X , y );
+
+  auto solver = Solver::new_Solver( "SMOSolver" );
+  auto smo = dynamic_cast< SMOSolver * >( solver );
+  solver->set_par( SMOSolver::dblSMOTol , 1e-10 );
+  svm.register_Solver( solver );
+
+  const double value = resolve( solver );
+  check_close( value , from_scratch( & svm ) , 1e-8 , "the first training" );
+
+  // nothing has changed, hence there is nothing left to do
+  const double again = resolve( solver );
+  check( ( again == value ) && ( ! smo->get_iter() ) ,
+         "re-solving an unchanged SVMBlock takes no iteration" );
+
+  // the trade-off parameter: the bound on the multipliers, hence a scaling
+  svm.set_C( 10 );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "C increased" );
+
+  svm.set_C( 0.05 );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "C decreased" );
+
+  // the shape of the loss: the bound and the diagonal of the Hessian
+  svm.set_squared_loss( true );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "squared loss" );
+
+  svm.set_C( 2 );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "C changed with the squared loss" );
+
+  svm.set_squared_loss( false );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "back to the hinge loss" );
+
+  // the targets: the signs, hence the Hessian, hence a restart
+  svm.chg_target( - svm.get_y()[ 0 ] , 0 );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "one target flipped" );
+
+  {
+   doubleVec flip( 4 );
+   for( Index i = 0 ; i < 4 ; ++i )
+    flip[ i ] = - svm.get_y()[ 10 + i ];
+   svm.chg_targets( flip.begin() , Block::Range( 10 , 14 ) );
+   }
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "a range of targets flipped" );
+
+  {
+   Block::Subset nms = { 20 , 30 , 40 };
+   doubleVec flip( 3 );
+   for( Index i = 0 ; i < 3 ; ++i )
+    flip[ i ] = - svm.get_y()[ nms[ i ] ];
+   svm.chg_targets( flip.begin() , std::move( nms ) , true );
+   }
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "a subset of targets flipped" );
+
+  // a target that the concrete class does not admit leaves everything as is
+  bool caught = false;
+  const double before = svm.get_y()[ 5 ];
+  try { svm.chg_target( 0.5 , 5 ); }
+  catch( const std::exception & e ) { caught = true; }
+  check( caught && ( svm.get_y()[ 5 ] == before ) &&
+         ( svm.get_dual_signs()[ 5 ] == before ) ,
+         "a rejected target changes nothing" );
+
+  // the kernel and the regularisation of the bias: everything changes
+  svm.set_kernel( SVMBlock::kGaussian , 0.25 );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "the kernel changed" );
+
+  svm.set_reg_bias( true );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "the bias regularised" );
+
+  svm.unregister_Solver( solver );
+  delete solver;
+  }
+
+ // the same, on a regression problem, where epsilon is one more knob - - - -
+ {
+  const Index n = 40 , m = 3;
+  doubleVec X , y;
+  make_svr_data( n , m , X , y , 17 );
+
+  SVRBlock svm;
+  svm.load( n , m , X , y );
+
+  auto solver = Solver::new_Solver( "SMOSolver" );
+  solver->set_par( SMOSolver::dblSMOTol , 1e-10 );
+  svm.register_Solver( solver );
+
+  resolve( solver );
+
+  svm.set_epsilon( 0.3 );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "epsilon increased" );
+
+  svm.set_epsilon( 0.01 );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "epsilon decreased" );
+
+  // a target of a regression problem only changes the linear coefficients
+  svm.chg_target( svm.get_y()[ 3 ] + 1 , 3 );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "one target changed" );
+
+  svm.set_C( 8 );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "C increased" );
+
+  svm.unregister_Solver( solver );
+  delete solver;
+  }
+
+ // the abstract representation follows the changes - - - - - - - - - - - - -
+
+ std::cout << "changing with the abstract representation" << std::endl;
+ {
+  const Index n = 30 , m = 3;
+  doubleVec Xc , yc , Xr , yr;
+  make_svc_data( n , m , Xc , yc , 19 );
+  make_svr_data( n , m , Xr , yr , 23 );
+
+  for( int form = SVMBlock::kWolfeDual ; form <= SVMBlock::kPrimal ;
+       ++form ) {
+   const std::string frm = ( form == SVMBlock::kWolfeDual ) ? "dual: "
+                                                            : "primal: ";
+
+   check_change( "SVCBlock" , form , Xc , yc , n , m ,
+                 []( SVMBlock * svm ) { svm->set_C( 12 ); } ,
+                 frm + "C" );
+
+   check_change( "SVCBlock" , form , Xc , yc , n , m ,
+                 []( SVMBlock * svm ) { svm->set_squared_loss( true ); } ,
+                 frm + "squared loss" );
+
+   check_change( "SVCBlock" , form , Xc , yc , n , m ,
+                 []( SVMBlock * svm ) {
+                  svm->set_squared_loss( true );
+                  svm->set_C( 0.5 );
+                  } , frm + "squared loss and C" );
+
+   check_change( "SVCBlock" , form , Xc , yc , n , m ,
+                 []( SVMBlock * svm ) { svm->set_reg_bias( true ); } ,
+                 frm + "regularised bias" );
+
+   check_change( "SVCBlock" , form , Xc , yc , n , m ,
+                 []( SVMBlock * svm ) {
+                  svm->chg_target( - svm->get_y()[ 1 ] , 1 );
+                  } , frm + "a target" );
+
+   check_change( "SVRBlock" , form , Xr , yr , n , m ,
+                 []( SVMBlock * svm ) {
+                  dynamic_cast< SVRBlock * >( svm )->set_epsilon( 0.4 );
+                  } , frm + "epsilon" );
+
+   check_change( "SVRBlock" , form , Xr , yr , n , m ,
+                 []( SVMBlock * svm ) {
+                  svm->chg_target( svm->get_y()[ 2 ] + 1 , 2 );
+                  } , frm + "a target of a regression" );
+   }
+
+  // the kernel has no primal, hence it is only changed under the dual
+  check_change( "SVCBlock" , SVMBlock::kWolfeDual , Xc , yc , n , m ,
+                []( SVMBlock * svm ) {
+                 svm->set_kernel( SVMBlock::kGaussian , 0.5 );
+                 } , "dual: the kernel" );
+
+  // and it cannot be changed to a nonlinear one under the primal
+  bool caught = false;
+  try {
+   SVCBlock svm;
+   svm.load( n , m , Xc , yc );
+   SimpleConfiguration< int > cfg( SVMBlock::kPrimal );
+   svm.generate_abstract_variables( & cfg );
+   svm.set_kernel( SVMBlock::kGaussian );
+   }
+  catch( const std::exception & e ) { caught = true; }
+  check( caught , "a nonlinear kernel is refused under the primal" );
   }
 
  // the Solution saving the trained model - - - - - - - - - - - - - - - - - -

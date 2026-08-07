@@ -36,11 +36,10 @@ SMSpp_insert_in_factory_cpp_1( SVRBlock );
 /*-------------------------- OTHER INITIALIZATIONS -------------------------*/
 /*--------------------------------------------------------------------------*/
 
-void SVRBlock::set_epsilon( double epsilon )
+void SVRBlock::set_epsilon( double epsilon , ModParam issueMod ,
+                            ModParam issueAMod )
 {
  static const std::string _prfx = "SVRBlock::set_epsilon: ";
-
- check_modifiable( _prfx );
 
  if( epsilon < 0 )
   throw( std::invalid_argument( _prfx + "epsilon must be nonnegative" ) );
@@ -48,10 +47,19 @@ void SVRBlock::set_epsilon( double epsilon )
  if( epsilon == f_epsilon )
   return;
 
+ if( ! not_dry_run( issueMod ) )
+  return;
+
  f_epsilon = epsilon;
 
- if( ! v_ds.empty() )  // the linear coefficients of the dual depend on it
-  set_dual_data();
+ // epsilon only enters the linear coefficients of the parametric map, which
+ // remap() takes care of
+ update_abstract( remap() , issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockMod >(
+                            this , SVMBlockMod::eChgEpsilon ) ,
+                           Observer::par2chnl( issueMod ) );
 
  }  // end( SVRBlock::set_epsilon )
 

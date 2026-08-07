@@ -158,6 +158,24 @@ namespace SMSpp_di_unipi_it
  * Configuration passed to generate_abstract_variables(), or found in the
  * BlockConfig, and defaults to the dual; see the comments to that method.
  *
+ * <b>Changing the training problem.</b> The hyper-parameters and the targets
+ * can be changed at any time, also while the abstract representation is
+ * constructed and a Solver is attached to the SVMBlock: the latter updates the
+ * abstract representation and issues both the *physical* Modification saying
+ * what exactly has changed [see SVMBlockMod] and the *abstract* ones
+ * describing how the abstract representation has changed as a consequence, so
+ * that a Solver reading either representation can react to it, and in
+ * particular can re-optimize starting from the previous solution rather than
+ * from scratch [see SMOSolver].
+ *
+ * Not every change can be described that way, though. Changing the kernel, or
+ * whether the bias is regularised, changes the Hessian of the dual as a whole,
+ * and changing the data set changes the size of the problem; there is no
+ * point in describing such a change term by term, and therefore the abstract
+ * representation is rebuilt from scratch and the NBModification, the "nuclear
+ * option" saying that everything has to be read anew, is issued instead. Which
+ * changes are of either kind is said in the comments to each method.
+ *
  * <b>The model.</b> Whichever formulation and Solver is used, the trained
  * model is always available in the kernel expansion form
  * \f[
@@ -185,6 +203,10 @@ class SVMBlock : public Block
 
  using doubleVec = std::vector< double >;      ///< a vector of double
  using c_doubleVec = const doubleVec;          ///< a const vector of double
+
+ using doubleVec_it = doubleVec::iterator;     ///< iterator in a doubleVec
+ using c_doubleVec_it = doubleVec::const_iterator;
+ ///< const iterator in a doubleVec
 
  using IndexVec = std::vector< Index >;        ///< a vector of Index
  using c_IndexVec = const IndexVec;            ///< a const vector of Index
@@ -422,37 +444,69 @@ class SVMBlock : public Block
 /** @} ---------------------------------------------------------------------*/
 /*----------------- METHODS FOR MODIFYING THE SVMBlock ---------------------*/
 /*--------------------------------------------------------------------------*/
-/** @name Modifying the hyper-parameters
+/** @name Modifying the hyper-parameters and the targets
  *
  * The hyper-parameters are not part of the "model" in the SMS++ sense: they
- * define which optimization problem the SVMBlock encodes. They can therefore
- * only be changed while no abstract representation is constructed and no
- * Solver is attached; otherwise, exception is thrown.
+ * define which optimization problem the SVMBlock encodes. Together with the
+ * targets, they can be changed at any time, also while the abstract
+ * representation is constructed and a Solver is attached; each method says
+ * which part of the abstract representation it updates and which Modification
+ * it issues, the two ModParam having the usual meaning [see
+ * Observer::make_par()], the first one for the physical Modification and the
+ * second one for the abstract ones.
  *  @{ */
 
  /// sets the trade-off parameter C, which must be positive
+ /** Sets the trade-off parameter \f$ C \f$ between the regularisation term
+  * and the training error, which must be positive.
+  *
+  * In the dual formulation \f$ C \f$ is the upper bound on the multipliers,
+  * unless the loss is squared, in which case it rather is the diagonal term
+  * \f$ 1 / 2C \f$ of the Hessian; in the primal one it is the coefficient of
+  * the slacks in the Objective. Either way the change is a local one, and it
+  * is described by the corresponding Modification. */
 
- void set_C( double C );
+ void set_C( double C , ModParam issueMod = eNoBlck ,
+             ModParam issueAMod = eNoBlck );
 
 /*--------------------------------------------------------------------------*/
  /// sets the kernel function and its parameters
  /** Sets the kernel: \p type is one of the values of kernel_type, \p gamma is
   * either a positive value or one of the values of gamma_type, \p degree is
   * the (positive) degree of the polynomial kernel and \p coef0 the constant
-  * term of the polynomial and sigmoid ones. */
+  * term of the polynomial and sigmoid ones.
+  *
+  * The kernel is the Hessian of the dual, hence changing it changes the
+  * latter as a whole: if the abstract representation encodes the dual it is
+  * therefore rebuilt and a NBModification is issued. The primal does not
+  * depend on the kernel, which for it can only be the linear one: exception
+  * is thrown if any other one is set while the primal is generated. */
 
  void set_kernel( int type , double gamma = dGammaScale , int degree = 3 ,
-                  double coef0 = 0 );
+                  double coef0 = 0 , ModParam issueMod = eNoBlck ,
+                  ModParam issueAMod = eNoBlck );
 
 /*--------------------------------------------------------------------------*/
  /// sets whether the slacks are penalised quadratically
+ /** Sets whether the slacks are penalised quadratically, which in the dual
+  * means removing the upper bound on the multipliers and adding the diagonal
+  * term \f$ 1 / 2C \f$ to the Hessian, and in the primal means moving the
+  * coefficient \f$ C \f$ of the slacks from the linear to the quadratic part
+  * of the Objective: a local change in both cases. */
 
- void set_squared_loss( bool squared );
+ void set_squared_loss( bool squared , ModParam issueMod = eNoBlck ,
+                        ModParam issueAMod = eNoBlck );
 
 /*--------------------------------------------------------------------------*/
  /// sets whether the bias is regularised together with the weights
+ /** Sets whether the bias is regularised together with the weights. In the
+  * primal this only means adding the term \f$ b^2 \f$ to the Objective, but
+  * in the dual it makes the equality constraint disappear and adds the
+  * rank-one term \f$ s s^T \f$ to the Hessian: if the abstract representation
+  * encodes the dual it is therefore rebuilt and a NBModification is issued. */
 
- void set_reg_bias( bool reg );
+ void set_reg_bias( bool reg , ModParam issueMod = eNoBlck ,
+                    ModParam issueAMod = eNoBlck );
 
 /*--------------------------------------------------------------------------*/
  /// sets the weight of the regularisation term
@@ -460,9 +514,52 @@ class SVMBlock : public Block
   * to 1. It exists so that make_consensus_Block() can divide the term evenly
   * among the copies of the model it creates, and there is little reason to
   * set it by hand: doing so changes the problem that the SVMBlock encodes,
-  * since the trade-off with the loss term is what \p C is for. */
+  * since the trade-off with the loss term is what \p C is for. Only the
+  * primal formulation is written in terms of it, hence nothing has to be done
+  * if the abstract representation encodes the dual. */
 
- void set_reg_weight( double weight );
+ void set_reg_weight( double weight , ModParam issueMod = eNoBlck ,
+                      ModParam issueAMod = eNoBlck );
+
+/*--------------------------------------------------------------------------*/
+ /// changes the target of one sample
+ /** Changes the target of sample \p i to \p ny, which must be an admissible
+  * value for the concrete class; if it is not, nothing is changed and
+  * exception is thrown.
+  *
+  * A target only enters the parametric map, i.e., the signs \f$ s_k \f$ and
+  * the linear coefficients \f$ q_k \f$ of the dual index space. If only the
+  * latter change, as is the case for a regression problem, the change is a
+  * local one, the coefficients being the linear part of the Objective of the
+  * dual and the sides of the constraints of the primal. If the signs change,
+  * as is the case for a classification problem, both formulations change all
+  * over, and therefore the abstract representation is rebuilt and a
+  * NBModification is issued. The Gram matrix is not affected, since it only
+  * depends on the samples. */
+
+ void chg_target( double ny , Index i , ModParam issueMod = eNoBlck ,
+                  ModParam issueAMod = eNoBlck );
+
+/*--------------------------------------------------------------------------*/
+ /// changes the targets of a range of samples
+ /** Changes the targets of all the samples i with rng.first <= i <
+  * min( rng.second , get_NSamples() ) to the corresponding value in \p ny,
+  * i.e., the target of sample i becomes *( ny + i - rng.first ); see
+  * chg_target() for the details. */
+
+ void chg_targets( c_doubleVec_it ny , Range rng = INFRange ,
+                   ModParam issueMod = eNoBlck ,
+                   ModParam issueAMod = eNoBlck );
+
+/*--------------------------------------------------------------------------*/
+ /// changes the targets of an arbitrary subset of samples
+ /** Changes the target of sample nms[ i ] to ny[ i ] for all i; as the &&
+  * tells, \p nms is "consumed" by the method. If \p ordered is true then
+  * \p nms is ordered by increasing Index. See chg_target() for the details. */
+
+ void chg_targets( c_doubleVec_it ny , Subset && nms , bool ordered = false ,
+                   ModParam issueMod = eNoBlck ,
+                   ModParam issueAMod = eNoBlck );
 
 /*--------------------------------------------------------------------------*/
  /// makes \p to a SVMBlock with the same hyper-parameters as this one
@@ -740,9 +837,81 @@ class SVMBlock : public Block
  void check_data( void ) const;
 
 /*--------------------------------------------------------------------------*/
- /// throws exception if the SVMBlock cannot be reconfigured
+ /// what a change requires of the abstract representation
 
- void check_modifiable( const std::string & method ) const;
+ enum ar_update {
+  eARNone = 0 ,       ///< nothing has to be done
+  eARBounds = 1 ,     ///< the bounds on the multipliers have to be reset
+  eARSides = 2 ,      ///< the sides of the constraints have to be reset
+  eARObjective = 4 ,  ///< the coefficients of the Objective have to be reset
+  eARAll = 8          ///< everything has to be rebuilt
+  };
+
+/*--------------------------------------------------------------------------*/
+ /// realigns the abstract representation to a change already made
+ /** Realigns the abstract representation to a change that has already been
+  * made in the physical representation, \p what saying which parts of it are
+  * affected [see ar_update]; it does nothing if no abstract representation is
+  * constructed. */
+
+ void update_abstract( unsigned char what , ModParam issueMod ,
+                       ModParam issueAMod );
+
+/*--------------------------------------------------------------------------*/
+ /// rebuilds the parametric map after the data it depends on have changed
+ /** Rebuilds the parametric map, i.e., calls set_dual_data(), and returns
+  * what the change requires of the abstract representation [see ar_update]:
+  * nothing if the map is the same as before, everything if the signs have
+  * changed, since they are all over both formulations, and only the linear
+  * coefficients of the Objective of the dual, or the sides of the constraints
+  * of the primal, if the coefficients alone have. */
+
+ unsigned char remap( void );
+
+/*--------------------------------------------------------------------------*/
+ /// like remap(), but putting the previous targets back if it fails
+ /** Like remap(), but if the new targets turn out not to be admissible for
+  * the concrete class the previous ones, \p o_y, are put back in place before
+  * the exception is let through, so that a rejected change leaves the
+  * SVMBlock exactly as it was. */
+
+ unsigned char remap_targets( doubleVec && o_y );
+
+/*--------------------------------------------------------------------------*/
+ /// resets the bounds on the multipliers of the dual formulation
+
+ void update_abstract_bounds( ModParam issueAMod );
+
+/*--------------------------------------------------------------------------*/
+ /// resets the sides of the constraints of the primal formulation
+
+ void update_abstract_sides( ModParam issueAMod );
+
+/*--------------------------------------------------------------------------*/
+ /// resets the coefficients of the Objective of whichever formulation
+ /** Resets all the coefficients of the Objective of whichever formulation the
+  * abstract representation encodes to the values dictated by the current data
+  * of the SVMBlock, with the exception of the off-diagonal ones of the dual,
+  * which only depend on the Gram matrix and on the signs: whatever changes
+  * those rebuilds the abstract representation instead. */
+
+ void update_abstract_objective( ModParam issueAMod );
+
+/*--------------------------------------------------------------------------*/
+ /// rebuilds the abstract representation, issuing a NBModification
+ /** Destroys whatever part of the abstract representation is constructed and
+  * generates it anew, of the same formulation, out of the current data of the
+  * SVMBlock, then issues the NBModification saying that everything has to be
+  * read anew. This is what a change that no set of "local" Modification can
+  * describe does, so that whoever is attached to the SVMBlock always finds
+  * an abstract representation that agrees with the physical one. */
+
+ void rebuild_abstract( ModParam issueMod );
+
+/*--------------------------------------------------------------------------*/
+ /// deletes the abstract representation, leaving the cached data alone
+
+ void delete_abstract( void );
 
 /*--------------------------------------------------------------------------*/
  /// deletes the abstract representation and the cached quantities
@@ -831,6 +1000,202 @@ class SVMBlock : public Block
 /*--------------------------------------------------------------------------*/
 
  };  // end( class( SVMBlock ) )
+
+/*--------------------------------------------------------------------------*/
+/*-------------------------- CLASS SVMBlockMod -----------------------------*/
+/*--------------------------------------------------------------------------*/
+/*--------------------------- GENERAL NOTES --------------------------------*/
+/*--------------------------------------------------------------------------*/
+/// a change of the training problem of a SVMBlock
+/** Derived class from Modification to describe a change of the data of a
+ * SVMBlock, i.e., of the training problem it encodes: which one is said by
+ * type(), one of the values of SVMBlock_mod_type.
+ *
+ * This is a *physical* Modification: it is what a Solver reading the data out
+ * of the SVMBlock, such as SMOSolver, listens to, whereas one working on the
+ * abstract representation rather listens to the Modification of the Variable,
+ * Constraint and Objective that the SVMBlock issues alongside this one. Only
+ * the changes that leave the size and the structure of the training problem
+ * alone are described here; anything else is a NBModification. */
+
+class SVMBlockMod : public Modification
+{
+/*----------------------- PUBLIC PART OF THE CLASS -------------------------*/
+
+ public:
+
+/*---------------------------- PUBLIC TYPES --------------------------------*/
+ /// public enum for the types of SVMBlockMod
+
+ enum SVMBlock_mod_type {
+  eChgC = 0 ,        ///< change the trade-off parameter C
+  eChgKernel ,       ///< change the kernel or its parameters
+  eChgSquaredLoss ,  ///< change whether the slacks are squared
+  eChgRegBias ,      ///< change whether the bias is regularised
+  eChgRegWeight ,    ///< change the weight of the regularisation term
+  eChgEpsilon ,      ///< change the half-width of the insensitivity tube
+  eChgTargets        ///< change the targets of some samples
+  };
+
+/*---------------------- CONSTRUCTOR & DESTRUCTOR --------------------------*/
+
+ /// constructor: takes the SVMBlock and the type
+
+ SVMBlockMod( SVMBlock * const fblock , int type )
+  : f_Block( fblock ) , f_type( type ) {}
+
+/*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+ ~SVMBlockMod() override = default;  ///< destructor, does nothing
+
+/*-------------------- PUBLIC METHODS OF THE CLASS -------------------------*/
+
+ /// returns the [SVM]Block to which the SVMBlockMod refers
+
+ [[nodiscard]] Block * get_Block( void ) const override {
+  return( f_Block );
+  }
+
+/*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ /// accessor to the type of the Modification
+
+ [[nodiscard]] int type( void ) const { return( f_type ); }
+
+/*--------------------- PROTECTED PART OF THE CLASS ------------------------*/
+
+ protected:
+
+/*-------------------------- PROTECTED METHODS -----------------------------*/
+ /// print the SVMBlockMod
+
+ void print( std::ostream & output ) const override {
+  output << "SVMBlockMod[" << this << "]: ";
+  switch( f_type ) {
+   case( eChgC ):           output << "change C"; break;
+   case( eChgKernel ):      output << "change the kernel"; break;
+   case( eChgSquaredLoss ): output << "change the loss"; break;
+   case( eChgRegBias ):     output << "change the regularisation of the bias";
+                            break;
+   case( eChgRegWeight ):   output << "change the regularisation weight";
+                            break;
+   case( eChgEpsilon ):     output << "change epsilon"; break;
+   case( eChgTargets ):     output << "change the targets"; break;
+   }
+  }
+
+/*--------------------- PROTECTED FIELDS OF THE CLASS ----------------------*/
+
+ SVMBlock * f_Block;   ///< the SVMBlock the Modification refers to
+ int f_type;           ///< the type of the Modification
+
+/*--------------------------------------------------------------------------*/
+
+ };  // end( class( SVMBlockMod ) )
+
+/*--------------------------------------------------------------------------*/
+/*------------------------ CLASS SVMBlockRngdMod ---------------------------*/
+/*--------------------------------------------------------------------------*/
+/// a change concerning a range of samples of a SVMBlock
+/** Derived class from SVMBlockMod to describe a change concerning a range of
+ * samples, i.e., all those whose index i satisfies rng().first <= i <
+ * rng().second. */
+
+class SVMBlockRngdMod : public SVMBlockMod
+{
+/*----------------------- PUBLIC PART OF THE CLASS -------------------------*/
+
+ public:
+
+/*---------------------- CONSTRUCTOR & DESTRUCTOR --------------------------*/
+
+ /// constructor: takes the SVMBlock, the type and the range
+
+ SVMBlockRngdMod( SVMBlock * const fblock , int type , Block::Range rng )
+  : SVMBlockMod( fblock , type ) , f_rng( rng ) {}
+
+/*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+ ~SVMBlockRngdMod() override = default;  ///< destructor, does nothing
+
+/*-------------------- PUBLIC METHODS OF THE CLASS -------------------------*/
+
+ /// accessor to the range
+
+ [[nodiscard]] Block::c_Range & rng( void ) const { return( f_rng ); }
+
+/*--------------------- PROTECTED PART OF THE CLASS ------------------------*/
+
+ protected:
+
+/*-------------------------- PROTECTED METHODS -----------------------------*/
+ /// print the SVMBlockRngdMod
+
+ void print( std::ostream & output ) const override {
+  SVMBlockMod::print( output );
+  output << " of samples [ " << f_rng.first << " , " << f_rng.second << " )"
+         << std::endl;
+  }
+
+/*--------------------- PROTECTED FIELDS OF THE CLASS ----------------------*/
+
+ Block::Range f_rng;   ///< the range of samples
+
+/*--------------------------------------------------------------------------*/
+
+ };  // end( class( SVMBlockRngdMod ) )
+
+/*--------------------------------------------------------------------------*/
+/*------------------------ CLASS SVMBlockSbstMod ---------------------------*/
+/*--------------------------------------------------------------------------*/
+/// a change concerning an arbitrary subset of samples of a SVMBlock
+/** Derived class from SVMBlockMod to describe a change concerning an
+ * arbitrary subset of samples, i.e., those whose index is in nms(). */
+
+class SVMBlockSbstMod : public SVMBlockMod
+{
+/*----------------------- PUBLIC PART OF THE CLASS -------------------------*/
+
+ public:
+
+/*---------------------- CONSTRUCTOR & DESTRUCTOR --------------------------*/
+
+ /// constructor: takes the SVMBlock, the type and the subset
+ /** Constructor: takes the SVMBlock, the type and the subset. As the && tells,
+  * \p nms is "consumed" by the constructor and its resources become property
+  * of the SVMBlockSbstMod object. */
+
+ SVMBlockSbstMod( SVMBlock * const fblock , int type , Block::Subset && nms )
+  : SVMBlockMod( fblock , type ) , f_nms( std::move( nms ) ) {}
+
+/*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+ ~SVMBlockSbstMod() override = default;  ///< destructor, does nothing
+
+/*-------------------- PUBLIC METHODS OF THE CLASS -------------------------*/
+
+ /// accessor to the subset
+
+ [[nodiscard]] Block::c_Subset & nms( void ) const { return( f_nms ); }
+
+/*--------------------- PROTECTED PART OF THE CLASS ------------------------*/
+
+ protected:
+
+/*-------------------------- PROTECTED METHODS -----------------------------*/
+ /// print the SVMBlockSbstMod
+
+ void print( std::ostream & output ) const override {
+  SVMBlockMod::print( output );
+  output << " of " << f_nms.size() << " samples" << std::endl;
+  }
+
+/*--------------------- PROTECTED FIELDS OF THE CLASS ----------------------*/
+
+ Block::Subset f_nms;   ///< the subset of samples
+
+/*--------------------------------------------------------------------------*/
+
+ };  // end( class( SVMBlockSbstMod ) )
 
 /*--------------------------------------------------------------------------*/
 /*------------------------ CLASS SVMBlockSolution --------------------------*/

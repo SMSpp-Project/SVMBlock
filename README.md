@@ -45,6 +45,17 @@ independent, and much smaller, SVM per chunk; equivalently, it is its
 Dantzig-Wolfe decomposition over the chunks. Like the primal, it needs the
 linear kernel.
 
+The hyper-parameters and the targets can be changed at any time, also while a
+`Solver` is attached and the abstract representation is constructed: the
+`Block` updates the latter and issues both the *physical* `Modification`
+saying what exactly has changed and the *abstract* ones describing how the
+abstract representation has changed as a consequence, so that a `Solver`
+reading either representation can react to it. Whatever changes the Hessian of
+the dual as a whole, i.e., the kernel, the data set or the regularisation of
+the bias, rather rebuilds the abstract representation and issues a
+`NBModification`, since there would be no point in describing such a change
+term by term.
+
 The linear, polynomial, gaussian, laplacian and sigmoid kernels are provided.
 Whichever formulation and `Solver` is used, the trained model is available in
 the kernel expansion form, and for the linear kernel the weight vector is
@@ -60,8 +71,15 @@ decomposition method that at each iteration optimizes over the smallest
 possible working set and therefore never needs the (dense) Hessian of the dual
 as a whole, which is what makes it the standard choice for training a SVM. It
 reads the data out of the physical representation of the `SVMBlock`, so it
-does not require the abstract one to be generated at all. The two-multiplier
-step is the one of
+does not require the abstract one to be generated at all. It keeps the
+multipliers and the gradient of the dual at them across the calls to
+`compute()` and reads the `Modification` the `SVMBlock` issues to find out
+what to do with them: whatever leaves the Hessian of the dual alone, such as
+the trade-off parameter or the half-width of the insensitivity tube, only
+requires the multipliers to be scaled back into their bounds and the gradient
+to be updated in linear time, so that the re-optimization starts from the
+previous solution and a model selection costs much less than the sum of the
+individual trainings. The two-multiplier step is the one of
 
 J. C. Platt "Sequential Minimal Optimization: A Fast Algorithm for Training
 Support Vector Machines" *Microsoft Research technical report* MSR-TR-98-14,

@@ -113,7 +113,32 @@ namespace SMSpp_di_unipi_it
  * on Neural Networks* 11(5), 1188-1193, 2000
  *
  * since a regression sample contributes two dual indices with opposite signs,
- * whence the two sides of its insensitivity tube. */
+ * whence the two sides of its insensitivity tube.
+ *
+ * <b>Re-optimization.</b> The Solver keeps the multipliers and the gradient of
+ * the dual at them across the calls to compute(), and reads the Modification
+ * that the SVMBlock issues [see SVMBlockMod] to find out what it has to do
+ * with them. Whatever changes the Hessian of the dual, i.e., the kernel, the
+ * data set or the regularisation of the bias, leaves nothing to be re-used and
+ * the algorithm restarts from the origin; anything else, i.e., the trade-off
+ * parameter, the shape of the loss, the half-width of the insensitivity tube
+ * and the targets of a regression problem, only changes the bounds, the linear
+ * term or the diagonal, and therefore the previous multipliers are still a
+ * sensible starting point:
+ *
+ * - if the upper bound has decreased, the multipliers are *scaled* rather than
+ *   clipped, which is what keeps them feasible for the equality constraint as
+ *   well, since the latter is homogeneous;
+ *
+ * - the gradient is then updated in \f$ O( N ) \f$ time, being affine in the
+ *   multipliers, in the linear term and in the diagonal alike, and therefore
+ *   it is exactly the gradient at the new point of the new dual, as if it had
+ *   been recomputed from scratch in \f$ O( N^2 ) \f$ time.
+ *
+ * This is what makes a model selection, where the very same data set is
+ * trained over and over with different hyper-parameters, cost much less than
+ * the sum of the individual trainings, and it costs nothing when nothing has
+ * changed, in which case compute() returns immediately. */
 
 class SMOSolver : public Solver
 {
@@ -152,6 +177,10 @@ class SMOSolver : public Solver
 
 /*--------------------------------------------------------------------------*/
  /// solves the dual of the training problem
+ /** Solves the dual of the training problem, starting from the solution of
+  * the previous call if the Modification issued by the SVMBlock in the
+  * meantime allow it, and from the origin otherwise; see the comments to the
+  * class for the details. */
 
  int compute( bool changedvars = true ) override;
 
@@ -254,6 +283,30 @@ class SMOSolver : public Solver
 
 /*--------------------------- PROTECTED METHODS ----------------------------*/
 
+ /// tells whether the given Modification allows a warm start
+ /** Returns true if the given Modification, and recursively all those a
+  * GroupModification contains, leave the multipliers of the previous call to
+  * compute() worth starting from, and false if the algorithm rather has to
+  * restart from the origin. */
+
+ bool guts_of_poM( const Modification * mod ) const;
+
+/*--------------------------------------------------------------------------*/
+ /// reads the data of the dual out of the SVMBlock, starting from the origin
+
+ void reload( void );
+
+/*--------------------------------------------------------------------------*/
+ /// realigns the cached data, the multipliers and the gradient to the SVMBlock
+ /** Realigns the data of the dual cached out of the SVMBlock to the current
+  * ones, and with them the multipliers of the previous call to compute() and
+  * the gradient of the dual at them, so that the algorithm can restart from
+  * there. Returns false if the change turns out not to be one it can follow,
+  * in which case the caller has to reload() everything. */
+
+ bool resync( void );
+
+/*--------------------------------------------------------------------------*/
  /// the SMO iteration proper, for the dual with the equality constraint
 
  int solve_with_equality( void );
@@ -298,9 +351,18 @@ class SMOSolver : public Solver
  double f_rb = 0;              ///< 1 if the bias is regularised, 0 otherwise
  double f_d = 0;               ///< the diagonal term due to the squared loss
  const double * f_K = nullptr;      ///< the n x n Gram matrix
- const double * f_ds = nullptr;     ///< the N signs
  const Index * f_di = nullptr;      ///< the N sample indices
- const double * f_dq = nullptr;     ///< the N linear coefficients
+
+ /* The signs and the linear coefficients are *copied* rather than pointed to
+  * in the SVMBlock, since the gradient is updated with the difference between
+  * their new and their old value, which requires having the latter around
+  * once the SVMBlock has changed. */
+
+ doubleVec v_s;                ///< the N signs
+ doubleVec v_q;                ///< the N linear coefficients
+
+ const double * f_ds = nullptr;     ///< shortcut to v_s.data()
+ const double * f_dq = nullptr;     ///< shortcut to v_q.data()
 
 /*----------------------- PRIVATE PART OF THE CLASS ------------------------*/
 

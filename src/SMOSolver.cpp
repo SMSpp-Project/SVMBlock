@@ -86,32 +86,27 @@ int SMOSolver::compute( bool changedvars )
 
  lock();  // lock the mutex
 
- /* Every call re-reads the whole data of the dual out of the SVMBlock and
-  * restarts from the origin, hence whatever changed since the previous call
-  * is taken into account by construction and the queued Modification can just
-  * be dropped. */
- v_mod.clear();
+ /* Find out what has changed since the previous call: a warm start is only
+  * possible if every queued Modification allows it, and there is nothing to
+  * start from unless a solution has been found already. */
+
+ bool warm = f_solved;
+
+ for( ; ; ) {
+  auto mod = pop();
+  if( ! mod )
+   break;
+  if( ! guts_of_poM( mod.get() ) )
+   warm = false;
+  }
+
+ // realign to the SVMBlock, from the previous solution or from the origin - -
+
+ if( ( ! warm ) || ( ! resync() ) )
+  reload();
 
  f_solved = false;
  f_iter = 0;
-
- // cache the data of the dual out of the SVMBlock- - - - - - - - - - - - - -
-
- f_n = f_SVM->get_NSamples();
- f_N = f_SVM->get_NDual();
- f_u = f_SVM->get_ub();
- f_rb = f_SVM->get_reg_bias() ? 1 : 0;
- f_d = f_SVM->get_squared_loss() ? 1 / ( 2 * f_SVM->get_C() ) : 0;
-
- f_K = f_SVM->get_K().data();
- f_ds = f_SVM->get_dual_signs().data();
- f_di = f_SVM->get_dual_samples().data();
- f_dq = f_SVM->get_dual_costs().data();
-
- // start from the origin, where the gradient is just the linear term - - - -
-
- v_alpha.assign( f_N , 0 );
- v_G.assign( f_dq , f_dq + f_N );
 
  int status;
  if( f_rb ) {
@@ -167,6 +162,131 @@ void SMOSolver::get_var_solution( Configuration * solc )
 
 /*--------------------------------------------------------------------------*/
 /*--------------------------- PROTECTED METHODS ----------------------------*/
+/*--------------------------------------------------------------------------*/
+
+bool SMOSolver::guts_of_poM( const Modification * mod ) const
+{
+ // a GroupModification allows a warm start only if all of its members do
+ if( auto gm = dynamic_cast< const GroupModification * >( mod ) ) {
+  bool ok = true;
+  for( const auto & sm : gm->sub_Modifications() )
+   if( ! guts_of_poM( sm.get() ) )
+    ok = false;
+  return( ok );
+  }
+
+ if( dynamic_cast< const NBModification * >( mod ) )
+  return( false );  // everything has changed
+
+ if( auto sm = dynamic_cast< const SVMBlockMod * >( mod ) )
+  switch( sm->type() ) {
+   case( SVMBlockMod::eChgKernel ):
+   case( SVMBlockMod::eChgRegBias ):
+    return( false );  // the Hessian of the dual changes as a whole
+   default:
+    return( true );   // only the bounds, the linear term or the diagonal do
+   }
+
+ /* An abstract Modification issued by the SVMBlock while changing its own
+  * physical representation describes something that the physical Modification
+  * issued alongside it has already accounted for. Anything else means that
+  * someone has changed the abstract representation directly: since this
+  * Solver does not read it, and the physical representation may therefore no
+  * longer agree with it, there is nothing better to do than to start over. */
+
+ return( ! mod->concerns_Block() );
+
+ }  // end( SMOSolver::guts_of_poM )
+
+/*--------------------------------------------------------------------------*/
+
+void SMOSolver::reload( void )
+{
+ f_n = f_SVM->get_NSamples();
+ f_N = f_SVM->get_NDual();
+ f_u = f_SVM->get_ub();
+ f_rb = f_SVM->get_reg_bias() ? 1 : 0;
+ f_d = f_SVM->get_squared_loss() ? 1 / ( 2 * f_SVM->get_C() ) : 0;
+
+ f_K = f_SVM->get_K().data();
+ f_di = f_SVM->get_dual_samples().data();
+
+ v_s = f_SVM->get_dual_signs();
+ v_q = f_SVM->get_dual_costs();
+ f_ds = v_s.data();
+ f_dq = v_q.data();
+
+ // start from the origin, where the gradient is just the linear term
+ v_alpha.assign( f_N , 0 );
+ v_G = v_q;
+
+ }  // end( SMOSolver::reload )
+
+/*--------------------------------------------------------------------------*/
+
+bool SMOSolver::resync( void )
+{
+ // the size and the structure of the dual have to be the same
+ if( ( f_N != f_SVM->get_NDual() ) || ( f_n != f_SVM->get_NSamples() ) ||
+     ( v_alpha.size() != f_N ) || ( v_G.size() != f_N ) ||
+     ( v_s.size() != f_N ) || ( v_q.size() != f_N ) ||
+     ( f_rb != ( f_SVM->get_reg_bias() ? 1 : 0 ) ) )
+  return( false );
+
+ // and so have the signs, which are all over the Hessian
+ auto & s = f_SVM->get_dual_signs();
+ if( ! std::equal( s.begin() , s.end() , v_s.begin() ) )
+  return( false );
+
+ f_K = f_SVM->get_K().data();  // both may have been moved elsewhere in the
+ f_di = f_SVM->get_dual_samples().data();            // meantime
+
+ /* The gradient G = Q alpha + q is affine in the multipliers, in the linear
+  * term and in the diagonal alike, whence each of the three changes below is
+  * followed exactly, and in O( N ) time. They are applied in the order in
+  * which they compose: the scaling uses the previous linear term, and the
+  * diagonal the scaled multipliers. */
+
+ const double u = f_SVM->get_ub();
+
+ if( u < Inf< double >() ) {
+  double mx = 0;
+  for( auto ak : v_alpha )
+   mx = std::max( mx , ak );
+
+  if( mx > u ) {
+   /* The multipliers are scaled, rather than clipped, so that they keep
+    * satisfying the equality constraint, which is homogeneous; scaling them
+    * by rho gives the gradient rho ( G - q ) + q. */
+   const double rho = u / mx;
+   for( Index k = 0 ; k < f_N ; ++k ) {
+    v_G[ k ] = rho * ( v_G[ k ] - v_q[ k ] ) + v_q[ k ];
+    v_alpha[ k ] *= rho;
+    }
+   }
+  }
+
+ f_u = u;
+
+ auto & q = f_SVM->get_dual_costs();
+ for( Index k = 0 ; k < f_N ; ++k )
+  if( q[ k ] != v_q[ k ] ) {
+   v_G[ k ] += q[ k ] - v_q[ k ];
+   v_q[ k ] = q[ k ];
+   }
+
+ const double d = f_SVM->get_squared_loss() ? 1 / ( 2 * f_SVM->get_C() ) : 0;
+
+ if( d != f_d ) {
+  for( Index k = 0 ; k < f_N ; ++k )
+   v_G[ k ] += ( d - f_d ) * v_alpha[ k ];
+  f_d = d;
+  }
+
+ return( true );
+
+ }  // end( SMOSolver::resync )
+
 /*--------------------------------------------------------------------------*/
 
 int SMOSolver::solve_with_equality( void )

@@ -257,16 +257,22 @@ void SVMBlock::guts_of_load( void )
 {
  check_data();
 
- guts_of_destructor();  // any previous abstract representation is void
+ v_K.clear();       // the data set changed, and so did everything that is
+ v_dcoef.clear();   // derived from it
+ f_gamma_res = 0;
 
- set_dual_data();       // rebuild the parametric map
+ set_dual_data();   // rebuild the parametric map
 
  v_alpha.assign( get_NDual() , 0 );
  v_w_sol.clear();
  f_b = 0;
 
- if( anyone_there() )
-  add_Modification( std::make_shared< NBModification >( this ) );
+ /* Whatever the abstract representation encoded is void, the size of the
+  * problem having changed as well: it is generated anew out of the new data
+  * set, so that whoever is attached to the SVMBlock always finds it in
+  * agreement with the physical representation, and the NBModification says
+  * that everything has to be read anew. */
+ rebuild_abstract( eNoBlck );
 
  }  // end( SVMBlock::guts_of_load )
 
@@ -316,21 +322,9 @@ Solution * SVMBlock::get_Solution( Configuration * solc , bool emptys )
 /*----------------- METHODS FOR MODIFYING THE SVMBlock ---------------------*/
 /*--------------------------------------------------------------------------*/
 
-void SVMBlock::check_modifiable( const std::string & method ) const
-{
- if( AR )
-  throw( std::logic_error( method + "the abstract representation of the "
-                           "SVMBlock has already been generated" ) );
-
- }  // end( SVMBlock::check_modifiable )
-
-/*--------------------------------------------------------------------------*/
-
-void SVMBlock::set_C( double C )
+void SVMBlock::set_C( double C , ModParam issueMod , ModParam issueAMod )
 {
  static const std::string _prfx = "SVMBlock::set_C: ";
-
- check_modifiable( _prfx );
 
  if( C <= 0 )
   throw( std::invalid_argument( _prfx + "C must be positive" ) );
@@ -338,27 +332,52 @@ void SVMBlock::set_C( double C )
  if( C == f_C )
   return;
 
+ if( ! not_dry_run( issueMod ) )
+  return;
+
  f_C = C;
 
- if( ! v_ds.empty() )    // the linear coefficients of the dual may depend
-  set_dual_data();       // on C, and so does the upper bound
+ /* C is the upper bound on the multipliers, unless the loss is squared, in
+  * which case it is the diagonal of the Hessian of the dual; either way it is
+  * in the Objective of the primal. The parametric map is not written in terms
+  * of it in either of the concrete classes, but nothing forbids it to be. */
+ unsigned char what = remap() | eARObjective;
+ if( ! ( AR & PrimalF ) )
+  what |= eARBounds;
+
+ update_abstract( what , issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockMod >(
+                            this , SVMBlockMod::eChgC ) ,
+                           Observer::par2chnl( issueMod ) );
 
  }  // end( SVMBlock::set_C )
 
 /*--------------------------------------------------------------------------*/
 
 void SVMBlock::set_kernel( int type , double gamma , int degree ,
-                           double coef0 )
+                           double coef0 , ModParam issueMod ,
+                           ModParam issueAMod )
 {
  static const std::string _prfx = "SVMBlock::set_kernel: ";
-
- check_modifiable( _prfx );
 
  if( ( type < kLinear ) || ( type > kSigmoid ) )
   throw( std::invalid_argument( _prfx + "unknown kernel type" ) );
 
  if( degree <= 0 )
   throw( std::invalid_argument( _prfx + "degree must be positive" ) );
+
+ if( ( type != kLinear ) && ( AR & PrimalF ) )
+  throw( std::invalid_argument( _prfx + "the primal is only available for "
+                                "the linear kernel" ) );
+
+ if( ( type == f_kernel ) && ( gamma == f_gamma ) && ( degree == f_degree )
+     && ( coef0 == f_coef0 ) )
+  return;
+
+ if( ! not_dry_run( issueMod ) )
+  return;
 
  f_kernel = type;
  f_gamma = gamma;
@@ -367,28 +386,202 @@ void SVMBlock::set_kernel( int type , double gamma , int degree ,
 
  v_K.clear();       // the Gram matrix, if any, is no longer the right one
  f_gamma_res = 0;   // and neither is the gamma derived from the data
+ v_dcoef.clear();
+
+ /* The Gram matrix is the Hessian of the dual, hence the latter changes as a
+  * whole; the primal, which only exists for the linear kernel, rather does
+  * not depend on it at all. */
+ update_abstract( ( AR & PrimalF ) ? eARNone : eARAll , issueMod ,
+                  issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockMod >(
+                            this , SVMBlockMod::eChgKernel ) ,
+                           Observer::par2chnl( issueMod ) );
 
  }  // end( SVMBlock::set_kernel )
 
 /*--------------------------------------------------------------------------*/
 
-void SVMBlock::set_squared_loss( bool squared )
+void SVMBlock::set_squared_loss( bool squared , ModParam issueMod ,
+                                 ModParam issueAMod )
 {
- check_modifiable( "SVMBlock::set_squared_loss: " );
+ if( squared == f_squared_loss )
+  return;
+
+ if( ! not_dry_run( issueMod ) )
+  return;
 
  f_squared_loss = squared;
+
+ // the upper bound on the multipliers and the diagonal of the Hessian of the
+ // dual, the linear and the quadratic coefficients of the slacks in the
+ // primal
+ unsigned char what = remap() | eARObjective;
+ if( ! ( AR & PrimalF ) )
+  what |= eARBounds;
+
+ update_abstract( what , issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockMod >(
+                            this , SVMBlockMod::eChgSquaredLoss ) ,
+                           Observer::par2chnl( issueMod ) );
 
  }  // end( SVMBlock::set_squared_loss )
 
 /*--------------------------------------------------------------------------*/
 
-void SVMBlock::set_reg_bias( bool reg )
+void SVMBlock::set_reg_bias( bool reg , ModParam issueMod ,
+                             ModParam issueAMod )
 {
- check_modifiable( "SVMBlock::set_reg_bias: " );
+ if( reg == f_reg_bias )
+  return;
+
+ if( ! not_dry_run( issueMod ) )
+  return;
 
  f_reg_bias = reg;
 
+ /* In the primal the bias just acquires, or loses, its quadratic coefficient
+  * in the Objective; in the dual the equality constraint disappears, or comes
+  * back, and the rank-one term s s^T is added to, or removed from, the
+  * Hessian, which is a structural change. */
+ update_abstract( remap() | ( ( AR & PrimalF ) ? eARObjective : eARAll ) ,
+                  issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockMod >(
+                            this , SVMBlockMod::eChgRegBias ) ,
+                           Observer::par2chnl( issueMod ) );
+
  }  // end( SVMBlock::set_reg_bias )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::set_reg_weight( double weight , ModParam issueMod ,
+                               ModParam issueAMod )
+{
+ static const std::string _prfx = "SVMBlock::set_reg_weight: ";
+
+ if( weight <= 0 )
+  throw( std::invalid_argument( _prfx + "the weight must be positive" ) );
+
+ if( weight == f_reg_weight )
+  return;
+
+ if( ! not_dry_run( issueMod ) )
+  return;
+
+ f_reg_weight = weight;
+
+ // only the primal is written in terms of the weight of the regularisation
+ // term, and only its Objective
+ update_abstract( ( AR & PrimalF ) ? eARObjective : eARNone , issueMod ,
+                  issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockMod >(
+                            this , SVMBlockMod::eChgRegWeight ) ,
+                           Observer::par2chnl( issueMod ) );
+
+ }  // end( SVMBlock::set_reg_weight )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::chg_target( double ny , Index i , ModParam issueMod ,
+                           ModParam issueAMod )
+{
+ if( i >= f_n )
+  throw( std::invalid_argument( "SVMBlock::chg_target: invalid sample" ) );
+
+ if( ny == v_y[ i ] )
+  return;
+
+ if( ! not_dry_run( issueMod ) )
+  return;
+
+ auto o_y = v_y;
+ v_y[ i ] = ny;
+
+ update_abstract( remap_targets( std::move( o_y ) ) , issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockRngdMod >(
+                            this , SVMBlockMod::eChgTargets ,
+                            Range( i , i + 1 ) ) ,
+                           Observer::par2chnl( issueMod ) );
+
+ }  // end( SVMBlock::chg_target )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::chg_targets( c_doubleVec_it ny , Range rng ,
+                            ModParam issueMod , ModParam issueAMod )
+{
+ rng.second = std::min( rng.second , f_n );
+ if( rng.second <= rng.first )  // nothing to change
+  return;
+
+ if( std::equal( ny , ny + ( rng.second - rng.first ) ,
+                 v_y.begin() + rng.first ) )
+  return;                       // nothing changes
+
+ if( ! not_dry_run( issueMod ) )
+  return;
+
+ auto o_y = v_y;
+ std::copy( ny , ny + ( rng.second - rng.first ) , v_y.begin() + rng.first );
+
+ update_abstract( remap_targets( std::move( o_y ) ) , issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockRngdMod >(
+                            this , SVMBlockMod::eChgTargets , rng ) ,
+                           Observer::par2chnl( issueMod ) );
+
+ }  // end( SVMBlock::chg_targets( Range ) )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::chg_targets( c_doubleVec_it ny , Subset && nms , bool ordered ,
+                            ModParam issueMod , ModParam issueAMod )
+{
+ if( nms.empty() )  // nothing to change
+  return;
+
+ for( auto i : nms )
+  if( i >= f_n )
+   throw( std::invalid_argument( "SVMBlock::chg_targets: invalid sample" ) );
+
+ if( ! not_dry_run( issueMod ) )
+  return;
+
+ auto o_y = v_y;
+
+ bool changed = false;
+ auto nyi = ny;
+ for( auto i : nms )
+  if( v_y[ i ] != *(nyi++) ) {
+   changed = true;
+   break;
+   }
+
+ if( ! changed )   // nothing changes
+  return;
+
+ for( auto i : nms )
+  v_y[ i ] = *(ny++);
+
+ update_abstract( remap_targets( std::move( o_y ) ) , issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockSbstMod >(
+                            this , SVMBlockMod::eChgTargets ,
+                            std::move( nms ) ) ,
+                           Observer::par2chnl( issueMod ) );
+
+ }  // end( SVMBlock::chg_targets( Subset ) )
 
 /*--------------------------------------------------------------------------*/
 
@@ -402,19 +595,191 @@ void SVMBlock::copy_hyperparameters( SVMBlock * to ) const
  }  // end( SVMBlock::copy_hyperparameters )
 
 /*--------------------------------------------------------------------------*/
+/*------------- REALIGNING THE ABSTRACT REPRESENTATION ---------------------*/
+/*--------------------------------------------------------------------------*/
 
-void SVMBlock::set_reg_weight( double weight )
+unsigned char SVMBlock::remap( void )
 {
- static const std::string _prfx = "SVMBlock::set_reg_weight: ";
+ if( v_ds.empty() )   // there is no parametric map yet, hence no abstract
+  return( eARNone );  // representation either
 
- check_modifiable( _prfx );
+ auto o_ds = v_ds;
+ auto o_dq = v_dq;
 
- if( weight <= 0 )
-  throw( std::invalid_argument( _prfx + "the weight must be positive" ) );
+ set_dual_data();
 
- f_reg_weight = weight;
+ v_dcoef.clear();  // the coefficients of the model depend on the map
 
- }  // end( SVMBlock::set_reg_weight )
+ if( ! AR )
+  return( eARNone );
+
+ if( ( v_ds.size() != o_ds.size() ) ||
+     ( ! std::equal( v_ds.begin() , v_ds.end() , o_ds.begin() ) ) )
+  return( eARAll );  // the signs are all over both formulations
+
+ if( std::equal( v_dq.begin() , v_dq.end() , o_dq.begin() ) )
+  return( eARNone );
+
+ // the coefficients q are the linear part of the Objective of the dual and
+ // the sides of the constraints of the primal
+ return( ( AR & PrimalF ) ? eARSides : eARObjective );
+
+ }  // end( SVMBlock::remap )
+
+/*--------------------------------------------------------------------------*/
+
+unsigned char SVMBlock::remap_targets( doubleVec && o_y )
+{
+ try {
+  return( remap() );
+  }
+ catch( ... ) {
+  /* The targets are only checked while the parametric map is built, hence a
+   * rejected one is found once it has been written: put the previous ones
+   * back, so that the SVMBlock is left exactly as it was. */
+  v_y = std::move( o_y );
+  set_dual_data();
+  throw;
+  }
+
+ }  // end( SVMBlock::remap_targets )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::update_abstract( unsigned char what , ModParam issueMod ,
+                                ModParam issueAMod )
+{
+ if( ( ! AR ) || ( what == eARNone ) || ( ! not_dry_run( issueAMod ) ) )
+  return;
+
+ if( what & eARAll ) {
+  rebuild_abstract( issueMod );
+  return;
+  }
+
+ if( AR & HasCns ) {
+  if( what & eARBounds )
+   update_abstract_bounds( issueAMod );
+  if( what & eARSides )
+   update_abstract_sides( issueAMod );
+  }
+
+ if( ( what & eARObjective ) && ( AR & HasObj ) )
+  update_abstract_objective( issueAMod );
+
+ }  // end( SVMBlock::update_abstract )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::update_abstract_bounds( ModParam issueAMod )
+{
+ if( AR & PrimalF )  // the slacks are bounded by zero, which never changes
+  return;
+
+ const double ub = get_ub();
+
+ for( auto & bx : v_box )
+  if( bx.get_rhs() != ub )
+   bx.set_rhs( ub , un_ModBlock( issueAMod ) );
+
+ }  // end( SVMBlock::update_abstract_bounds )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::update_abstract_sides( ModParam issueAMod )
+{
+ if( ! ( AR & PrimalF ) )  // the dual has no side depending on the data
+  return;
+
+ for( Index k = 0 ; k < v_cons.size() ; ++k )
+  if( v_cons[ k ].get_lhs() != - v_dq[ k ] )
+   v_cons[ k ].set_lhs( - v_dq[ k ] , un_ModBlock( issueAMod ) );
+
+ }  // end( SVMBlock::update_abstract_sides )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::update_abstract_objective( ModParam issueAMod )
+{
+ const Index N = get_NDual();
+
+ if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
+                             //- - - - - - - - - - - - - - - - - - - - - - - -
+  /* Only the linear coefficients and the diagonal of the Hessian are reset,
+   * the off-diagonal terms depending on the Gram matrix and on the signs
+   * alone: whatever changes those rebuilds the abstract representation. */
+  auto & K = get_K();
+  const double rb = f_reg_bias ? 1 : 0;
+  const double d = f_squared_loss ? 1 / ( 2 * f_C ) : 0;
+
+  doubleVec quad( N ) , lin( N );
+  for( Index k = 0 ; k < N ; ++k ) {
+   const double sk = v_ds[ k ];
+   const double Kkk = K[ std::size_t( v_di[ k ] ) * f_n + v_di[ k ] ];
+   lin[ k ] = - v_dq[ k ];
+   quad[ k ] = - ( sk * sk * ( Kkk + rb ) + d ) / 2;
+   }
+
+  /* The diagonal and the linear coefficients of a QuadFunction are those of
+   * the DQuadFunction it derives from, whence they are set through the
+   * latter; the off-diagonal terms, which it adds, are left alone. */
+  static_cast< DQuadFunction * >( f_obj.get_function()
+   )->modify_terms( quad.begin() , lin.begin() , Range( 0 , N ) ,
+                    un_ModBlock( issueAMod ) );
+  return;
+  }
+
+ // the primal formulation- - - - - - - - - - - - - - - - - - - - - - - - - -
+ //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+ const double rw = f_reg_weight / 2;
+ const Index tot = f_m + 1 + N;
+
+ doubleVec quad( tot ) , lin( tot , 0 );
+
+ for( Index j = 0 ; j < f_m ; ++j )
+  quad[ j ] = rw;
+
+ quad[ f_m ] = f_reg_bias ? rw : 0;
+
+ for( Index k = 0 ; k < N ; ++k ) {
+  quad[ f_m + 1 + k ] = f_squared_loss ? f_C : 0;
+  lin[ f_m + 1 + k ] = f_squared_loss ? 0 : f_C;
+  }
+
+ static_cast< DQuadFunction * >( f_obj.get_function()
+  )->modify_terms( quad.begin() , lin.begin() , Range( 0 , tot ) ,
+                   un_ModBlock( issueAMod ) );
+
+ }  // end( SVMBlock::update_abstract_objective )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::rebuild_abstract( ModParam issueMod )
+{
+ if( AR ) {
+  const auto oAR = AR;
+
+  delete_abstract();
+
+  /* The same parts of the same formulation are generated anew: which one it
+   * was is what the bits of AR say, so that no Configuration has to be kept
+   * around for this. */
+  SimpleConfiguration< int > cfg( ( oAR & PrimalF ) ? kPrimal : kWolfeDual );
+
+  if( oAR & HasVar )
+   generate_abstract_variables( & cfg );
+  if( oAR & HasCns )
+   generate_abstract_constraints();
+  if( oAR & HasObj )
+   generate_objective();
+  }
+
+ if( issue_pmod( issueMod ) && anyone_there() )
+  Block::add_Modification( std::make_shared< NBModification >( this ) ,
+                           Observer::par2chnl( issueMod ) );
+
+ }  // end( SVMBlock::rebuild_abstract )
 
 
 /*--------------------------------------------------------------------------*/
@@ -1051,11 +1416,24 @@ void SVMBlock::compute_bias( void )
 
 void SVMBlock::guts_of_destructor( void )
 {
+ delete_abstract();
+
+ v_K.clear();
+ v_dcoef.clear();
+ f_gamma_res = 0;
+
+ }  // end( SVMBlock::guts_of_destructor )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::delete_abstract( void )
+{
  /* clear() all Constraint so that they do not bother to un-register
   * themselves from Variable that are going to be deleted anyway, then delete
-  * the whole abstract representation. This is also called to reset the
-  * abstract representation when a new data set is loaded, in which case a
-  * NBModification is issued immediately afterwards. */
+  * the whole abstract representation. The cached quantities, which do not
+  * depend on it, are left alone: this is also called to rebuild the abstract
+  * representation, in which case recomputing the Gram matrix would be a
+  * needless O( n^2 m ). */
 
  for( auto & cnst : v_cons )
   cnst.clear();
@@ -1075,17 +1453,21 @@ void SVMBlock::guts_of_destructor( void )
  v_w.clear();
  v_alpha_var.clear();
 
+ /* The bias of the primal is the only Variable of the SVMBlock that does not
+  * live in a container, hence the only one that is not destroyed here: since
+  * the Constraint and the Objective it was active in have been destroyed
+  * without un-registering, it would be left pointing at them, whence it is
+  * replaced by a fresh copy of itself, which the copy constructor of
+  * ColVariable makes active in nothing. */
+ f_b_var = ColVariable( f_b_var );
+
  reset_static_constraints();
  reset_static_variables();
  reset_objective();
 
- v_K.clear();
- v_dcoef.clear();
- f_gamma_res = 0;
-
  AR = 0;
 
- }  // end( SVMBlock::guts_of_destructor )
+ }  // end( SVMBlock::delete_abstract )
 
 /*--------------------------------------------------------------------------*/
 
