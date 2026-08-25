@@ -161,6 +161,36 @@ void SMOSolver::get_var_solution( Configuration * solc )
  }  // end( SMOSolver::get_var_solution )
 
 /*--------------------------------------------------------------------------*/
+
+Solution * SMOSolver::get_Solution( Configuration * solc )
+{
+ if( ! f_solved )
+  return( nullptr );
+
+ /* Which Solution the Configuration asks for is the SVMBlock's business, and
+  * asking it for an empty one is how it is found out: filling it is this
+  * Solver's business only if it is the one saving the model, which is
+  * precisely the one that requires no Variable to exist. */
+
+ auto sol = f_SVM->get_Solution( solc , true );
+
+ if( auto msol = dynamic_cast< SVMBlockSolution * >( sol ) ) {
+  // the multipliers are copied, since the Solver keeps its own for a re-solve
+  msol->set_dual_model( doubleVec( v_alpha ) , f_b );
+  return( msol );
+  }
+
+ delete sol;
+
+ /* Anything else saves the abstract representation, which this Solver does
+  * not write into: the base class does the only thing that can be done, that
+  * is, write the solution into the Variable and ask the SVMBlock for it. */
+
+ return( Solver::get_Solution( solc ) );
+
+ }  // end( SMOSolver::get_Solution )
+
+/*--------------------------------------------------------------------------*/
 /*--------------------------- PROTECTED METHODS ----------------------------*/
 /*--------------------------------------------------------------------------*/
 

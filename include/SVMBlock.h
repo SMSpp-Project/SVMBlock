@@ -1318,6 +1318,37 @@ class SVMBlockSolution : public Solution
   const override final;
 
 /** @} ---------------------------------------------------------------------*/
+/*------------------------ METHODS FOR WRITING THE MODEL -------------------*/
+/** @name Writing the model
+ *  @{ */
+
+ /// sets the model to the given multipliers and bias
+ /** Sets the model saved in this SVMBlockSolution to the multipliers
+  * \p alpha and the bias \p b, which is the form the model has when it
+  * comes from a dual. This is what a Solver reading the physical
+  * representation of the SVMBlock, such as SMOSolver, uses to produce a
+  * Solution out of its own data, without writing anything into the SVMBlock
+  * and therefore without needing any Variable to exist. */
+
+ void set_dual_model( SVMBlock::doubleVec && alpha , double b ) {
+  v_alpha = std::move( alpha );
+  v_w.clear();
+  f_b = b;
+  }
+
+/*--------------------------------------------------------------------------*/
+ /// sets the model to the given weights and bias
+ /** The counterpart of set_dual_model() for a model that comes from a primal,
+  * where it is given by the weights \p w and the bias \p b and the
+  * multipliers are unknown. */
+
+ void set_primal_model( SVMBlock::doubleVec && w , double b ) {
+  v_w = std::move( w );
+  v_alpha.clear();
+  f_b = b;
+  }
+
+/** @} ---------------------------------------------------------------------*/
 /*------------------------ METHODS FOR READING THE MODEL -------------------*/
 /** @name Reading the model
  *  @{ */

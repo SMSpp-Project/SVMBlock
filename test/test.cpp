@@ -43,6 +43,8 @@
 
 #include "LinearFunction.h"
 
+#include "ColVariableSolution.h"
+
 #include <cmath>
 
 #include <functional>
@@ -989,6 +991,73 @@ int main( int argc , char ** argv )
                 "same model after the round trip" );
    delete in;
    }
+  }
+
+ // the Solution the Solver provides on its own - - - - - - - - - - - - - - -
+
+ std::cout << "Solver::get_Solution" << std::endl;
+ {
+  const Index n = 40 , m = 3;
+  doubleVec X , y;
+  make_svc_data( n , m , X , y , 7 );
+
+  // no abstract representation is ever generated here: the whole point of
+  // the Solution the Solver provides is that none is needed
+  SVCBlock svm;
+  svm.set_C( 4 );
+  svm.load( n , m , X , y );
+
+  auto solver = Solver::new_Solver( "SMOSolver" );
+  solver->set_par( SMOSolver::dblSMOTol , 1e-10 );
+  svm.register_Solver( solver );
+
+  check( ! solver->get_Solution() , "no Solution before compute()" );
+
+  solver->compute();
+
+  SimpleConfiguration< int > model_cfg( 3 );
+  auto sol = dynamic_cast< SVMBlockSolution * >(
+                                       solver->get_Solution( & model_cfg ) );
+  check( sol , "the Solver provides the model as a SVMBlockSolution" );
+
+  // and it does so out of its own data: the SVMBlock is left alone, its
+  // model being still the all-zero one that load() has left there
+  check( svm.get_alphas() == doubleVec( svm.get_NDual() , 0 ) ,
+         "the SVMBlock is not written into" );
+
+  // the model the Solver would write into the SVMBlock is the same one
+  solver->get_var_solution();
+  if( sol )
+   check( ( sol->get_alphas() == svm.get_alphas() ) &&
+          ( sol->get_b() == svm.get_b() ) && sol->get_w().empty() ,
+          "it is the model the Solver has found" );
+
+  /* Any other Solution saves the abstract representation, which only the
+   * SVMBlock can fill: it is generated now, and the default Configuration
+   * has to give the usual ColVariableSolution. */
+  SimpleConfiguration< int > dual( SVMBlock::kWolfeDual );
+  svm.generate_abstract_variables( & dual );
+  svm.generate_abstract_constraints();
+  svm.generate_objective();
+
+  auto other = solver->get_Solution();
+  check( dynamic_cast< ColVariableSolution * >( other ) ,
+         "any other Solution comes from the SVMBlock" );
+
+  // whatever it is, it has to be the same model
+  if( other ) {
+   svm.set_dual_solution( doubleVec( svm.get_NDual() , 0 ) , 0 );
+   other->write( & svm );
+   svm.get_solution_from_abstract();
+   check_close( primal_value( & svm ) , solver->get_var_value() , 1e-8 ,
+                "the same model, whoever provides the Solution" );
+   }
+
+  delete other;
+  delete sol;
+
+  svm.unregister_Solver( solver );
+  delete solver;
   }
 
  // the netCDF round trip - - - - - - - - - - - - - - - - - - - - - - - - - -

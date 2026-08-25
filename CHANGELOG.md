@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into their bounds and updates the latter in linear time rather than
   restarting from the origin
 
+- `SMOSolver::get_Solution()`, which builds the SVMBlockSolution out of the
+  multipliers the Solver holds, without writing anything into the SVMBlock and
+  therefore without requiring any Variable to exist; any other Solution saves
+  the abstract representation, and is left to the base class. Requires the
+  `Solver::get_Solution()` of the core
+
 - `SVMBlockSolution`, the Solution saving the trained model rather than the
   abstract representation, which is what `get_Solution()` returns when the
   Configuration asks for it and what makes the model writable to a file

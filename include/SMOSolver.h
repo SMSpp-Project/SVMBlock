@@ -199,6 +199,28 @@ class SMOSolver : public Solver
  void get_var_solution( Configuration * solc = nullptr ) override;
 
 /*--------------------------------------------------------------------------*/
+ /// returns the trained model as a Solution, without going through the Block
+ /** Returns the solution of the last call to compute() as a Solution object,
+  * or nullptr if there is none.
+  *
+  * If what the Configuration asks for is a SVMBlockSolution, i.e., the
+  * trained model [see SVMBlockSolution], then it is built here out of the
+  * multipliers this Solver holds, without writing anything into the SVMBlock:
+  * no Variable is therefore required to exist, and the SVMBlock is not
+  * lock()-ed, so that any number of Solver attached to it can produce their
+  * own Solution at the same time.
+  *
+  * Any other Solution saves (part of) the abstract representation instead,
+  * which only the SVMBlock can fill; the method of the base class is used
+  * then, which writes the solution into the Variable and asks the SVMBlock
+  * for it. Which one is asked for is not decided here: the SVMBlock is asked
+  * for an empty Solution, exactly as it would be in the end, and what it
+  * returns is what tells the two cases apart. */
+
+ [[nodiscard]] Solution * get_Solution( Configuration * solc = nullptr )
+  override;
+
+/*--------------------------------------------------------------------------*/
  /// returns a valid lower bound on the optimal objective function value
 
  OFValue get_lb( void ) override { return( f_value ); }

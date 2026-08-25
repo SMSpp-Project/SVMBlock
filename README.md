@@ -71,11 +71,14 @@ decomposition method that at each iteration optimizes over the smallest
 possible working set and therefore never needs the (dense) Hessian of the dual
 as a whole, which is what makes it the standard choice for training a SVM. It
 reads the data out of the physical representation of the `SVMBlock`, so it
-does not require the abstract one to be generated at all. It keeps the
-multipliers and the gradient of the dual at them across the calls to
-`compute()` and reads the `Modification` the `SVMBlock` issues to find out
-what to do with them: whatever leaves the Hessian of the dual alone, such as
-the trade-off parameter or the half-width of the insensitivity tube, only
+does not require the abstract one to be generated at all, and it provides the
+trained model directly as a `SVMBlockSolution`, without writing it into the
+`Block` first and therefore without needing any `Variable` to write it into.
+It also keeps the multipliers and the gradient of the dual at them across the
+calls to `compute()`, and reads the `Modification` the `SVMBlock` issues to
+find out what to do with them: whatever leaves the Hessian of the dual alone,
+such as the trade-off parameter or the half-width of the insensitivity tube,
+only
 requires the multipliers to be scaled back into their bounds and the gradient
 to be updated in linear time, so that the re-optimization starts from the
 previous solution and a model selection costs much less than the sum of the
