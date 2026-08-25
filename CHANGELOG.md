@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `SVMBlockSolution::read()` only looked at the physical representation, hence
+  it saved nothing at all when the SVMBlock had been solved by a Solver
+  working on the abstract one, which is where the model is then left
+
 - loading a new data set left the SVMBlock with no abstract representation at
   all, so that a Solver reading it found an empty problem after the
   NBModification; it is now rebuilt out of the new data set

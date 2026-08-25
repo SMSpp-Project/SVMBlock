@@ -1707,6 +1707,15 @@ void SVMBlockSolution::read( const Block * block )
   throw( std::invalid_argument( "SVMBlockSolution::read: block is not a "
                                 "SVMBlock" ) );
 
+ /* The model may well be in the abstract representation rather than in the
+  * physical one, which is the case whenever the SVMBlock has just been solved
+  * by a Solver working on the former: the latter is therefore refreshed out
+  * of it first, so that what is saved here is the model that has just been
+  * found, whoever has found it. The const_cast is what refreshing a cached
+  * view of the very same information out of a const object costs. */
+ if( svm->AR & SVMBlock::HasVar )
+  const_cast< SVMBlock * >( svm )->get_solution_from_abstract();
+
  v_alpha = svm->v_alpha;
  v_w = svm->v_w_sol;
  f_b = svm->f_b;

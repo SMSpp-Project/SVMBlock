@@ -1266,6 +1266,11 @@ class SVMBlockSolution : public Solution
  *  @{ */
 
  /// read the model of the given SVMBlock
+ /** Reads the model currently stored in the given SVMBlock. If an abstract
+  * representation is constructed the model is read out of it first, since
+  * that is where a Solver working on it has just left it; a Solver reading
+  * the physical representation, such as SMOSolver, keeps the two in synch,
+  * and can anyway fill this Solution itself [see set_dual_model()]. */
 
  void read( const Block * block ) override final;
 

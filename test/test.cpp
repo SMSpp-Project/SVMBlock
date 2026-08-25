@@ -977,6 +977,29 @@ int main( int argc , char ** argv )
    delete sol;
    }
 
+  /* A Solver working on the abstract representation leaves the model in the
+   * Variable, and the physical representation knows nothing about it: the
+   * Solution has to go and find it there. */
+  {
+   SVCBlock other;
+   other.set_C( 4 );
+   other.load( 40 , 3 , X , y );
+
+   SimpleConfiguration< int > primal( SVMBlock::kPrimal );
+   other.generate_abstract_variables( & primal );
+   other.generate_abstract_constraints();
+   other.generate_objective();
+
+   fill_primal( & other , svm.get_w() , svm.get_b() );
+
+   auto asol = dynamic_cast< SVMBlockSolution * >(
+                                  other.get_Solution( & model_cfg , false ) );
+   check( asol && ( asol->get_w() == svm.get_w() ) &&
+          ( asol->get_b() == svm.get_b() ) ,
+          "the model is read out of the abstract representation" );
+   delete asol;
+   }
+
   auto in = dynamic_cast< SVMBlockSolution * >(
                                   Solution::deserialize( "svmsolution.nc4" ) );
   check( in , "the netCDF file is read back as a SVMBlockSolution" );
