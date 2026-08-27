@@ -255,7 +255,7 @@ class SVMBlock : public Block
   * defaulting to nullptr so that this can also be used as the void
   * constructor. */
 
- explicit SVMBlock( Block * father = nullptr ) : Block( father ) , AR( 0 ) {}
+ explicit SVMBlock( Block * father = nullptr );
 
 /*--------------------------------------------------------------------------*/
  /// destructor of SVMBlock: deletes the abstract representation
@@ -742,12 +742,12 @@ class SVMBlock : public Block
 /*--------------------------------------------------------------------------*/
  /// returns the N multipliers defining the model
 
- c_doubleVec & get_alphas( void ) const { return( v_alpha ); }
+ c_doubleVec & get_alphas( void ) const;
 
 /*--------------------------------------------------------------------------*/
  /// returns the bias of the model
 
- double get_b( void ) const { return( f_b ); }
+ double get_b( void ) const;
 
 /*--------------------------------------------------------------------------*/
  /// returns the n coefficients of the kernel expansion of the model
@@ -967,9 +967,15 @@ class SVMBlock : public Block
  mutable double f_gamma_res = 0;
  ///< the cached value of gamma derived from the data, 0 if not derived yet
 
- doubleVec v_alpha;          ///< the N multipliers of the model
- doubleVec v_w_sol;          ///< the m weights of the model, if primal
- double f_b = 0;             ///< the bias of the model
+ /* The trained model, i.e., the multipliers, the weights and the bias.
+  * These are a datum of the SVMBlock rather than a snapshot of a solution:
+  * they are what predict() and decision_function() evaluate, and they
+  * survive the Solver that produced them. Yet they are exactly the content
+  * of a SVMBlockSolution, which is therefore what holds them, so that
+  * producing one is a clone() and accepting one is a copy. Never nullptr. */
+
+ SVMBlockSolution * f_training_Results;  ///< the trained model
+
  mutable doubleVec v_dcoef;  ///< the cached n kernel expansion coefficients
 
  // the abstract representation - - - - - - - - - - - - - - - - - - - - - - -
@@ -1406,6 +1412,20 @@ class SVMBlockSolution : public Solution
 /*--------------------------------------------------------------------------*/
 
  };  // end( class( SVMBlockSolution ) )
+
+/*--------------------------------------------------------------------------*/
+/*---------------- inline methods of SVMBlock needing the above ------------*/
+/*--------------------------------------------------------------------------*/
+// the two below are the model of the SVMBlock, which lives in the
+// SVMBlockSolution it owns and is therefore only complete down here
+
+inline SVMBlock::c_doubleVec & SVMBlock::get_alphas( void ) const {
+ return( f_training_Results->get_alphas() );
+ }
+
+inline double SVMBlock::get_b( void ) const {
+ return( f_training_Results->get_b() );
+ }
 
 /*--------------------------------------------------------------------------*/
 /*--------------------- FUNCTIONS OF THE SVMBlock GROUP --------------------*/

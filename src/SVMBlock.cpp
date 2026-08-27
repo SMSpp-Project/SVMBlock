@@ -77,6 +77,13 @@ static constexpr double dBndEps = 1e-8;
 static constexpr SVMBlock::Index dParallelK = 256;
 
 /*--------------------------------------------------------------------------*/
+/*--------------------- CONSTRUCTOR AND DESTRUCTOR -------------------------*/
+/*--------------------------------------------------------------------------*/
+
+SVMBlock::SVMBlock( Block * father ) : Block( father ) , AR( 0 ) ,
+ f_training_Results( new SVMBlockSolution ) {}
+
+/*--------------------------------------------------------------------------*/
 /*-------------------------- OTHER INITIALIZATIONS -------------------------*/
 /*--------------------------------------------------------------------------*/
 
@@ -263,9 +270,9 @@ void SVMBlock::guts_of_load( void )
 
  set_dual_data();   // rebuild the parametric map
 
- v_alpha.assign( get_NDual() , 0 );
- v_w_sol.clear();
- f_b = 0;
+ f_training_Results->v_alpha.assign( get_NDual() , 0 );
+ f_training_Results->v_w.clear();
+ f_training_Results->f_b = 0;
 
  /* Whatever the abstract representation encoded is void, the size of the
   * problem having changed as well: it is generated anew out of the new data
@@ -307,7 +314,16 @@ Solution * SVMBlock::get_Solution( Configuration * solc , bool emptys )
  switch( config ? config->f_value : 0 ) {
   case( 1 ): sol = new RowConstraintSolution; break;
   case( 2 ): sol = new ColRowSolution; break;
-  case( 3 ): sol = new SVMBlockSolution; break;
+  case( 3 ): {
+   // the model this SVMBlock holds *is* a SVMBlockSolution, so producing
+   // one is a clone of it; note that read() below refreshes it first when
+   // the model is in the abstract representation
+   if( emptys )
+    return( new SVMBlockSolution );
+   auto ssol = new SVMBlockSolution;
+   ssol->read( this );
+   return( ssol );
+   }
   default:   sol = new ColVariableSolution;
   }
 
@@ -1158,9 +1174,9 @@ void SVMBlock::set_dual_solution( doubleVec && alpha , double b )
   throw( std::invalid_argument( "SVMBlock::set_dual_solution: alpha has "
                                 "wrong size" ) );
 
- v_alpha = std::move( alpha );
- v_w_sol.clear();
- f_b = b;
+ f_training_Results->v_alpha = std::move( alpha );
+ f_training_Results->v_w.clear();
+ f_training_Results->f_b = b;
  v_dcoef.clear();
 
  }  // end( SVMBlock::set_dual_solution )
@@ -1173,9 +1189,9 @@ void SVMBlock::set_primal_solution( doubleVec && w , double b )
   throw( std::invalid_argument( "SVMBlock::set_primal_solution: w has wrong "
                                 "size" ) );
 
- v_w_sol = std::move( w );
- v_alpha.assign( get_NDual() , 0 );
- f_b = b;
+ f_training_Results->v_w = std::move( w );
+ f_training_Results->v_alpha.assign( get_NDual() , 0 );
+ f_training_Results->f_b = b;
  v_dcoef.clear();
 
  }  // end( SVMBlock::set_primal_solution )
@@ -1193,21 +1209,21 @@ void SVMBlock::get_solution_from_abstract( void )
 
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
-  v_alpha.resize( v_alpha_var.size() );
+  f_training_Results->v_alpha.resize( v_alpha_var.size() );
   for( Index k = 0 ; k < v_alpha_var.size() ; ++k )
-   v_alpha[ k ] = v_alpha_var[ k ].get_value();
+   f_training_Results->v_alpha[ k ] = v_alpha_var[ k ].get_value();
 
-  v_w_sol.clear();
+  f_training_Results->v_w.clear();
   compute_bias();
   }
  else {                      // the primal formulation - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
-  v_w_sol.resize( f_m );
+  f_training_Results->v_w.resize( f_m );
   for( Index j = 0 ; j < f_m ; ++j )
-   v_w_sol[ j ] = v_w[ j ].get_value();
+   f_training_Results->v_w[ j ] = v_w[ j ].get_value();
 
-  v_alpha.assign( get_NDual() , 0 );
-  f_b = f_b_var.get_value();
+  f_training_Results->v_alpha.assign( get_NDual() , 0 );
+  f_training_Results->f_b = f_b_var.get_value();
   }
 
  }  // end( SVMBlock::get_solution_from_abstract )
@@ -1221,8 +1237,9 @@ void SVMBlock::set_solution_in_abstract( void )
 
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                                            //- - - - - - - - - - - - - - - - -
+  auto & alpha = f_training_Results->v_alpha;
   for( Index k = 0 ; k < v_alpha_var.size() ; ++k )
-   v_alpha_var[ k ].set_value( k < v_alpha.size() ? v_alpha[ k ] : 0 );
+   v_alpha_var[ k ].set_value( k < alpha.size() ? alpha[ k ] : 0 );
 
   return;
   }
@@ -1237,14 +1254,14 @@ void SVMBlock::set_solution_in_abstract( void )
  for( Index j = 0 ; j < f_m ; ++j )
   v_w[ j ].set_value( w[ j ] );
 
- f_b_var.set_value( f_b );
+ f_b_var.set_value( f_training_Results->f_b );
 
  // the slacks are the smallest values that make the model feasible, which is
  // what they are worth at any optimal solution of the primal
  for( Index k = 0 ; k < v_xi.size() ; ++k ) {
   const double * xi = get_x( v_di[ k ] );
 
-  double f = f_b;
+  double f = f_training_Results->f_b;
   for( Index j = 0 ; j < f_m ; ++j )
    f += w[ j ] * xi[ j ];
 
@@ -1262,8 +1279,8 @@ SVMBlock::c_doubleVec & SVMBlock::get_dual_coefficients( void ) const
   return( v_dcoef );
 
  v_dcoef.assign( f_n , 0 );
- for( Index k = 0 ; k < v_alpha.size() ; ++k )
-  v_dcoef[ v_di[ k ] ] += v_ds[ k ] * v_alpha[ k ];
+ for( Index k = 0 ; k < f_training_Results->v_alpha.size() ; ++k )
+  v_dcoef[ v_di[ k ] ] += v_ds[ k ] * f_training_Results->v_alpha[ k ];
 
  return( v_dcoef );
 
@@ -1277,8 +1294,8 @@ SVMBlock::doubleVec SVMBlock::get_w( void ) const
   throw( std::logic_error( "SVMBlock::get_w: the weight vector only exists "
                            "for the linear kernel" ) );
 
- if( ! v_w_sol.empty() )
-  return( v_w_sol );
+ if( ! f_training_Results->v_w.empty() )
+  return( f_training_Results->v_w );
 
  auto & c = get_dual_coefficients();
 
@@ -1299,11 +1316,11 @@ SVMBlock::doubleVec SVMBlock::get_w( void ) const
 
 double SVMBlock::decision_function( const double * x ) const
 {
- double d = f_b;
+ double d = f_training_Results->f_b;
 
- if( ! v_w_sol.empty() ) {  // the model came out of the primal
+ if( ! f_training_Results->v_w.empty() ) {  // the model came out of the primal
   for( Index j = 0 ; j < f_m ; ++j )
-   d += v_w_sol[ j ] * x[ j ];
+   d += f_training_Results->v_w[ j ] * x[ j ];
   return( d );
   }
 
@@ -1371,9 +1388,9 @@ void SVMBlock::compute_bias( void )
 
  if( f_reg_bias ) {  // the bias is just one more weight
   double b = 0;
-  for( Index k = 0 ; k < v_alpha.size() ; ++k )
-   b += v_ds[ k ] * v_alpha[ k ];
-  f_b = b;
+  for( Index k = 0 ; k < f_training_Results->v_alpha.size() ; ++k )
+   b += v_ds[ k ] * f_training_Results->v_alpha[ k ];
+  f_training_Results->f_b = b;
   return;
   }
 
@@ -1387,8 +1404,8 @@ void SVMBlock::compute_bias( void )
  double sum = 0;
  Index cnt = 0;
 
- for( Index k = 0 ; k < v_alpha.size() ; ++k ) {
-  const double ak = v_alpha[ k ];
+ for( Index k = 0 ; k < f_training_Results->v_alpha.size() ; ++k ) {
+  const double ak = f_training_Results->v_alpha[ k ];
   if( ( ak <= lo ) || ( ak >= hi ) )  // not a free support vector
    continue;
 
@@ -1406,7 +1423,7 @@ void SVMBlock::compute_bias( void )
   }
 
  if( cnt )
-  f_b = sum / cnt;
+  f_training_Results->f_b = sum / cnt;
 
  }  // end( SVMBlock::compute_bias )
 
@@ -1417,6 +1434,9 @@ void SVMBlock::compute_bias( void )
 void SVMBlock::guts_of_destructor( void )
 {
  delete_abstract();
+
+ delete f_training_Results;
+ f_training_Results = nullptr;
 
  v_K.clear();
  v_dcoef.clear();
@@ -1716,9 +1736,10 @@ void SVMBlockSolution::read( const Block * block )
  if( svm->AR & SVMBlock::HasVar )
   const_cast< SVMBlock * >( svm )->get_solution_from_abstract();
 
- v_alpha = svm->v_alpha;
- v_w = svm->v_w_sol;
- f_b = svm->f_b;
+ // the model of the SVMBlock is a SVMBlockSolution itself, so this is a copy
+ v_alpha = svm->f_training_Results->v_alpha;
+ v_w = svm->f_training_Results->v_w;
+ f_b = svm->f_training_Results->f_b;
 
  }  // end( SVMBlockSolution::read )
 

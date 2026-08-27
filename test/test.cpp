@@ -699,6 +699,19 @@ int main( int argc , char ** argv )
    dw = std::max( dw , std::abs( w2[ j ] - w[ j ] ) );
   check( dw < 1e-12 , "the model is read out of a sub-Block" );
 
+  /* Each chunk is a SVMBlock of its own, hence it produces its own
+   * SVMBlockSolution: this is what a generic Solver working on the primal of
+   * a chunk, which knows nothing about SVMBlock, leaves behind. */
+  SimpleConfiguration< int > model_cfg( 3 );
+  auto csol = dynamic_cast< SVMBlockSolution * >(
+				  sub->get_Solution( & model_cfg , false ) );
+  double dsol = csol ? std::abs( csol->get_b() - b ) : 1;
+  if( csol )
+   for( Index j = 0 ; j < m ; ++j )
+    dsol = std::max( dsol , std::abs( csol->get_w()[ j ] - w[ j ] ) );
+  check( dsol < 1e-12 , "the chunk produces its own SVMBlockSolution" );
+  delete csol;
+
   delete dec;
 
   // a chunk of a single class would have an unbounded subproblem
