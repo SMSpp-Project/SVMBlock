@@ -39,6 +39,8 @@
 
 #include "Solution.h"
 
+#include <list>
+
 /*--------------------------------------------------------------------------*/
 /*------------------------------ NAMESPACE ---------------------------------*/
 /*--------------------------------------------------------------------------*/
@@ -620,6 +622,62 @@ class SVMBlock : public Block
                    ModParam issueAMod = eNoBlck );
 
 /*--------------------------------------------------------------------------*/
+ /// adds \p k samples at the end of the data set
+ /** Adds \p k samples at the end of the data set: \p X is their k x m matrix,
+  * stored row-wise as in load(), and \p y the vector of their k targets,
+  * whose admissible values are those of the concrete class.
+  *
+  * The samples the SVMBlock already has are *not* touched: their multipliers
+  * keep their value, the new ones start at zero, and what the Gram matrix
+  * already holds is kept, only the entries of the new samples being computed.
+  * This is what makes a training that follows an addition cost much less than
+  * a training from scratch, which is the point of the whole exercise: with
+  * the model of the previous data set still feasible, and optimal for all
+  * but the new samples, a Solver reading the physical representation, such as
+  * SMOSolver, re-optimizes rather than restarting [see the eAddSamples
+  * Modification].
+  *
+  * The dual index space grows accordingly, i.e., by \p k multipliers for a
+  * classification problem and by 2 \p k for a regression one; the abstract
+  * representation, if it exists, is rebuilt, since the size of the problem
+  * has changed, and a NBModification is issued alongside the physical one. */
+
+ void add_samples( Index k , c_doubleVec & X , c_doubleVec & y ,
+                   ModParam issueMod = eNoBlck ,
+                   ModParam issueAMod = eNoBlck );
+
+/*--------------------------------------------------------------------------*/
+ /// removes the samples of the given Range from the data set
+ /** Removes the samples i with rng.first <= i < min( rng.second ,
+  * get_NSamples() ) from the data set; the ones that follow take their
+  * place, hence the indices of the samples after the Range change. See
+  * remove_samples( Subset ) for the details. */
+
+ void remove_samples( Range rng , ModParam issueMod = eNoBlck ,
+                      ModParam issueAMod = eNoBlck );
+
+/*--------------------------------------------------------------------------*/
+ /// removes an arbitrary subset of samples from the data set
+ /** Removes the samples whose index is in \p nms, which is "consumed" as the
+  * && tells and is ordered by increasing Index if \p ordered is true; the
+  * samples that survive keep their relative order, hence their indices are
+  * shifted down by the number of removed samples that precede them.
+  *
+  * As in add_samples(), the surviving samples are not touched: their
+  * multipliers keep their value and the Gram matrix is compacted rather than
+  * recomputed. Note that removing a sample whose multiplier is nonzero makes
+  * the previous model unfeasible for the dual, the equality constraint no
+  * longer holding, which is the Solver's business to deal with [see the
+  * eRmvSamples Modification].
+  *
+  * The whole data set cannot be removed: a SVMBlock with no sample is not a
+  * training problem, and load() is what replaces a data set with another. */
+
+ void remove_samples( Subset && nms , bool ordered = false ,
+                      ModParam issueMod = eNoBlck ,
+                      ModParam issueAMod = eNoBlck );
+
+/*--------------------------------------------------------------------------*/
  /// makes \p to a SVMBlock with the same hyper-parameters as this one
  /** Copies all the hyper-parameters of this SVMBlock into \p to, so that the
   * two encode the same training problem save for the data set; the derived
@@ -991,6 +1049,17 @@ class SVMBlock : public Block
  void guts_of_set_structure( Index P );
 
 /*--------------------------------------------------------------------------*/
+ /// realigns the model to a dual index space that has changed size
+ /** Realigns the multipliers of the model to the dual index space of the new
+  * data set: \p o_di and \p o_ds are the sample and the sign of each *old*
+  * dual index, and \p o_smpl maps each new sample to the old one it was, or
+  * to Inf< Index >() if it is a new one. The multiplier of a dual index that
+  * survives is kept, that of a new one is zero. */
+
+ void remap_model( const IndexVec & o_di , const doubleVec & o_ds ,
+                   const Subset & o_smpl );
+
+/*--------------------------------------------------------------------------*/
  /// prints the SVMBlock on an ostream with the given verbosity
 
  void print( std::ostream & output , char vlvl = 0 ) const override;
@@ -1051,15 +1120,21 @@ class SVMBlock : public Block
 
  // the abstract representation - - - - - - - - - - - - - - - - - - - - - - -
 
- std::vector< ColVariable > v_alpha_var;  ///< the N multipliers (dual)
- std::vector< LB0Constraint > v_box;      ///< the N bounds on them (dual)
+ /* Whatever is indexed over the dual index space is *dynamic*, since adding
+  * or removing samples changes its size: the multipliers and their bounds in
+  * the dual, the slacks with their bounds and the margin constraints in the
+  * primal. The weights and the bias are indexed over the features, which do
+  * not change, hence they are static. */
+
+ std::list< ColVariable > v_alpha_var;    ///< the N multipliers (dual)
+ std::list< LB0Constraint > v_box;        ///< the N bounds on them (dual)
  FRowConstraint f_eq;                     ///< the equality constraint (dual)
 
  std::vector< ColVariable > v_w;          ///< the m weights (primal)
  ColVariable f_b_var;                     ///< the bias (primal)
- std::vector< ColVariable > v_xi;         ///< the N slacks (primal)
- std::vector< LB0Constraint > v_xi_box;   ///< the N bounds on them (primal)
- std::vector< FRowConstraint > v_cons;    ///< the N constraints (primal)
+ std::list< ColVariable > v_xi;           ///< the N slacks (primal)
+ std::list< LB0Constraint > v_xi_box;     ///< the N bounds on them (primal)
+ std::list< FRowConstraint > v_cons;      ///< the N constraints (primal)
 
  FRealObjective f_obj;                    ///< the objective
 
@@ -1113,7 +1188,9 @@ class SVMBlockMod : public Modification
   eChgRegBias ,      ///< change whether the bias is regularised
   eChgRegWeight ,    ///< change the weight of the regularisation term
   eChgEpsilon ,      ///< change the half-width of the insensitivity tube
-  eChgTargets        ///< change the targets of some samples
+  eChgTargets ,      ///< change the targets of some samples
+  eAddSamples ,      ///< add samples at the end of the data set
+  eRmvSamples        ///< remove samples from the data set
   };
 
 /*---------------------- CONSTRUCTOR & DESTRUCTOR --------------------------*/
@@ -1159,6 +1236,8 @@ class SVMBlockMod : public Modification
                             break;
    case( eChgEpsilon ):     output << "change epsilon"; break;
    case( eChgTargets ):     output << "change the targets"; break;
+   case( eAddSamples ):     output << "add samples"; break;
+   case( eRmvSamples ):     output << "remove samples"; break;
    }
   }
 

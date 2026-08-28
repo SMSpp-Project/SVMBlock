@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `add_samples()` and `remove_samples()`, which change the data set instead of
+  replacing it, with the `eAddSamples` and `eRmvSamples` Modification: the
+  samples that stay are not touched, their multipliers keep their value and
+  the Gram matrix is extended or compacted rather than recomputed. Whatever is
+  indexed over the dual index space is dynamic accordingly. `SMOSolver`
+  re-optimizes across them, which is what an incremental training, and a
+  k-fold cross-validation done by taking a fold out and putting it back, need
+
 - `LIBSVMSolver`, which hands the training problem over to LIBSVM: an
   independent implementation of the very algorithm `SMOSolver` implements,
   hence a reference to check it against, and a fast one for a large data set.

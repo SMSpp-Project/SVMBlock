@@ -152,6 +152,10 @@ class SMOSolver : public Solver
 
  using doubleVec = SVMBlock::doubleVec;
 
+ using IndexVec = SVMBlock::IndexVec;
+
+ using Subset = Block::Subset;
+
 /*--------------------- CONSTRUCTOR AND DESTRUCTOR -------------------------*/
 /** @name Constructor and destructor
  *  @{ */
@@ -311,7 +315,24 @@ class SMOSolver : public Solver
   * compute() worth starting from, and false if the algorithm rather has to
   * restart from the origin. */
 
- bool guts_of_poM( const Modification * mod ) const;
+ bool guts_of_poM( const Modification * mod );
+
+/*--------------------------------------------------------------------------*/
+ /// composes into v_smap the sample map of a Modification changing the data
+
+ void compose_smap( const Modification * mod );
+
+/*--------------------------------------------------------------------------*/
+ /// realigns the multipliers to a dual index space that has changed size
+ /** Realigns the multipliers, and with them everything else this Solver
+  * caches, to the dual index space of a data set some samples have been
+  * added to or removed from, which is what v_smap describes: the multiplier
+  * of a dual index that survives is kept, that of a new one starts at zero,
+  * the equality constraint is made to hold again and the gradient is
+  * recomputed. Returns false if the previous multipliers turn out not to be
+  * worth starting from, in which case the caller reload()s. */
+
+ bool resample( void );
 
 /*--------------------------------------------------------------------------*/
  /// reads the data of the dual out of the SVMBlock, starting from the origin
@@ -375,13 +396,24 @@ class SMOSolver : public Solver
  const double * f_K = nullptr;      ///< the n x n Gram matrix
  const Index * f_di = nullptr;      ///< the N sample indices
 
- /* The signs and the linear coefficients are *copied* rather than pointed to
-  * in the SVMBlock, since the gradient is updated with the difference between
-  * their new and their old value, which requires having the latter around
-  * once the SVMBlock has changed. */
+ /* The signs, the linear coefficients and the sample of each dual index are
+  * *copied* rather than pointed to in the SVMBlock, since the gradient is
+  * updated with the difference between their new and their old value, and the
+  * multipliers are realigned by matching the dual indices of the two, both of
+  * which require having the previous ones around once the SVMBlock has
+  * changed. */
 
  doubleVec v_s;                ///< the N signs
  doubleVec v_q;                ///< the N linear coefficients
+ IndexVec v_di_c;              ///< the N sample indices, copied
+
+ /* Which sample of the data set this Solver is aligned to each sample of the
+  * current one was, Inf< Index >() for a sample that has been added since;
+  * empty when no sample has been added or removed. It is composed as the
+  * Modification are popped, so that any number of changes between two calls
+  * to compute() is dealt with in one go [see compose_smap()]. */
+
+ Subset v_smap;
 
  const double * f_ds = nullptr;     ///< shortcut to v_s.data()
  const double * f_dq = nullptr;     ///< shortcut to v_q.data()

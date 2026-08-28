@@ -22,6 +22,10 @@
 
 #include <cmath>
 
+#include <map>
+
+#include <numeric>
+
 /*--------------------------------------------------------------------------*/
 /*------------------------- NAMESPACE AND USING ----------------------------*/
 /*--------------------------------------------------------------------------*/
@@ -194,7 +198,7 @@ Solution * SMOSolver::get_Solution( Configuration * solc )
 /*--------------------------- PROTECTED METHODS ----------------------------*/
 /*--------------------------------------------------------------------------*/
 
-bool SMOSolver::guts_of_poM( const Modification * mod ) const
+bool SMOSolver::guts_of_poM( const Modification * mod )
 {
  // a GroupModification allows a warm start only if all of its members do
  if( auto gm = dynamic_cast< const GroupModification * >( mod ) ) {
@@ -213,6 +217,13 @@ bool SMOSolver::guts_of_poM( const Modification * mod ) const
    case( SVMBlockMod::eChgKernel ):
    case( SVMBlockMod::eChgRegBias ):
     return( false );  // the Hessian of the dual changes as a whole
+   case( SVMBlockMod::eAddSamples ):
+   case( SVMBlockMod::eRmvSamples ):
+    /* The dual index space changes size, but the multipliers of the samples
+     * that are still there are still worth starting from: which they are is
+     * what the sample map says. */
+    compose_smap( mod );
+    return( true );
    default:
     return( true );   // only the bounds, the linear term or the diagonal do
    }
@@ -230,6 +241,45 @@ bool SMOSolver::guts_of_poM( const Modification * mod ) const
 
 /*--------------------------------------------------------------------------*/
 
+void SMOSolver::compose_smap( const Modification * mod )
+{
+ /* The map goes from the samples of the data set this Solver is aligned to
+  * to those of the current one, so the *first* change starts it as the
+  * identity and every other one is composed onto it. */
+
+ if( v_smap.empty() ) {
+  v_smap.resize( f_n );
+  std::iota( v_smap.begin() , v_smap.end() , Index( 0 ) );
+  }
+
+ if( auto rm = dynamic_cast< const SVMBlockRngdMod * >( mod ) ) {
+  // samples appended at the end: they were not there before
+  const auto rng = rm->rng();
+  v_smap.resize( v_smap.size() + ( rng.second - rng.first ) ,
+                 Inf< Index >() );
+  return;
+  }
+
+ if( auto sm = dynamic_cast< const SVMBlockSbstMod * >( mod ) ) {
+  // samples removed: the survivors keep their order, hence so does the map
+  auto & nms = sm->nms();
+  Subset nmap;
+  nmap.reserve( v_smap.size() - nms.size() );
+
+  auto rmv = nms.begin();
+  for( Index i = 0 ; i < v_smap.size() ; ++i )
+   if( ( rmv != nms.end() ) && ( *rmv == i ) )
+    ++rmv;
+   else
+    nmap.push_back( v_smap[ i ] );
+
+  v_smap = std::move( nmap );
+  }
+
+ }  // end( SMOSolver::compose_smap )
+
+/*--------------------------------------------------------------------------*/
+
 void SMOSolver::reload( void )
 {
  f_n = f_SVM->get_NSamples();
@@ -243,8 +293,11 @@ void SMOSolver::reload( void )
 
  v_s = f_SVM->get_dual_signs();
  v_q = f_SVM->get_dual_costs();
+ v_di_c = f_SVM->get_dual_samples();
  f_ds = v_s.data();
  f_dq = v_q.data();
+
+ v_smap.clear();   // whatever has changed, this is a fresh start
 
  // start from the origin, where the gradient is just the linear term
  v_alpha.assign( f_N , 0 );
@@ -254,19 +307,125 @@ void SMOSolver::reload( void )
 
 /*--------------------------------------------------------------------------*/
 
+bool SMOSolver::resample( void )
+{
+ /* The dual index space has changed size, samples having been added or
+  * removed: each new dual index is matched with the old one that referred to
+  * the same sample with the same sign, since that is all that identifies it
+  * [see the comments to SVMBlock]. The multiplier of a dual index that
+  * survives is kept, that of a new one starts at zero. */
+
+ const Index N = f_SVM->get_NDual();
+ auto & di = f_SVM->get_dual_samples();
+ auto & s = f_SVM->get_dual_signs();
+ auto & q = f_SVM->get_dual_costs();
+
+ if( ( di.size() != N ) || ( v_smap.size() != f_SVM->get_NSamples() ) )
+  return( false );
+
+ std::map< std::pair< Index , bool > , Index > o_k;
+ for( Index k = 0 ; k < v_di_c.size() ; ++k )
+  o_k[ { v_di_c[ k ] , v_s[ k ] > 0 } ] = k;
+
+ doubleVec n_alpha( N , 0 );
+ for( Index k = 0 ; k < N ; ++k ) {
+  const Index i = v_smap[ di[ k ] ];
+  if( i == Inf< Index >() )   // a new sample: its multiplier starts at zero
+   continue;
+  auto it = o_k.find( { i , s[ k ] > 0 } );
+  if( it != o_k.end() )
+   n_alpha[ k ] = v_alpha[ it->second ];
+  }
+
+ // the data of the dual, which is the new one from here on
+ f_n = f_SVM->get_NSamples();
+ f_N = N;
+ f_u = f_SVM->get_ub();
+ f_d = f_SVM->get_squared_loss() ? 1 / ( 2 * f_SVM->get_C() ) : 0;
+ f_K = f_SVM->get_K().data();
+ f_di = di.data();
+ v_s = s;
+ v_q = q;
+ v_di_c = di;
+ f_ds = v_s.data();
+ f_dq = v_q.data();
+ v_alpha = std::move( n_alpha );
+ v_smap.clear();
+
+ /* Removing a sample whose multiplier was nonzero leaves the equality
+  * constraint violated, and SMO starts from a feasible point: the excess is
+  * given back to the multipliers that can absorb it, which keeps the start
+  * as close as possible to the previous solution instead of throwing it
+  * away. Nothing to do without the equality constraint, i.e., with the bias
+  * regularised. */
+
+ if( ! f_rb ) {
+  double delta = 0;
+  for( Index k = 0 ; k < f_N ; ++k )
+   delta += v_s[ k ] * v_alpha[ k ];
+
+  for( Index k = 0 ; ( k < f_N ) && ( std::abs( delta ) > dSnap ) ; ++k ) {
+   // how much this multiplier can move in the direction that reduces the
+   // violation, i.e., down if its sign agrees with the excess and up if not
+   const double room = ( ( v_s[ k ] > 0 ) == ( delta > 0 ) )
+                       ? v_alpha[ k ] : f_u - v_alpha[ k ];
+   if( room <= 0 )
+    continue;
+
+   const double step = std::min( room , std::abs( delta ) );
+   v_alpha[ k ] += ( ( v_s[ k ] > 0 ) == ( delta > 0 ) ) ? - step : step;
+   delta -= ( ( v_s[ k ] > 0 ) == ( delta > 0 ) ) ? v_s[ k ] * step
+                                                  : - v_s[ k ] * step;
+   }
+
+  if( std::abs( delta ) > dSnap )   // it could not be absorbed
+   return( false );                 // start over
+  }
+
+ /* The gradient is recomputed rather than updated: a change of the dual
+  * index space touches every entry, and one pass over the Gram matrix, which
+  * is cached and has just been extended or compacted rather than recomputed,
+  * costs a fraction of the sweeps the re-optimization would take anyway. */
+
+ v_G = v_q;
+ for( Index k = 0 ; k < f_N ; ++k ) {
+  const double ak = v_alpha[ k ];
+  if( ! ak )
+   continue;
+  for( Index l = 0 ; l < f_N ; ++l )
+   v_G[ l ] += Q( l , k ) * ak;
+  }
+
+ return( true );
+
+ }  // end( SMOSolver::resample )
+
+/*--------------------------------------------------------------------------*/
+
 bool SMOSolver::resync( void )
 {
- // the size and the structure of the dual have to be the same
- if( ( f_N != f_SVM->get_NDual() ) || ( f_n != f_SVM->get_NSamples() ) ||
-     ( v_alpha.size() != f_N ) || ( v_G.size() != f_N ) ||
+ if( ( v_alpha.size() != f_N ) || ( v_G.size() != f_N ) ||
      ( v_s.size() != f_N ) || ( v_q.size() != f_N ) ||
      ( f_rb != ( f_SVM->get_reg_bias() ? 1 : 0 ) ) )
   return( false );
 
- // and so have the signs, which are all over the Hessian
- auto & s = f_SVM->get_dual_signs();
- if( ! std::equal( s.begin() , s.end() , v_s.begin() ) )
-  return( false );
+ // samples have been added or removed: the multipliers of those that are
+ // still there are realigned to the new dual index space, and the gradient
+ // is recomputed from them
+ if( ! v_smap.empty() ) {
+  if( ! resample() )
+   return( false );
+  }
+ else {
+  // the size and the structure of the dual have to be the same
+  if( ( f_N != f_SVM->get_NDual() ) || ( f_n != f_SVM->get_NSamples() ) )
+   return( false );
+
+  // and so have the signs, which are all over the Hessian
+  auto & s = f_SVM->get_dual_signs();
+  if( ! std::equal( s.begin() , s.end() , v_s.begin() ) )
+   return( false );
+  }
 
  f_K = f_SVM->get_K().data();  // both may have been moved elsewhere in the
  f_di = f_SVM->get_dual_samples().data();            // meantime

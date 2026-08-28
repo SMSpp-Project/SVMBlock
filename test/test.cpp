@@ -172,7 +172,7 @@ static double train( SVMBlock * svm , double tol = 1e-10 )
 static void fill_primal( SVMBlock * svm , const doubleVec & w , double b )
 {
  auto wv = svm->get_static_variable_v< ColVariable >( "w" );
- auto xv = svm->get_static_variable_v< ColVariable >( "xi" );
+ auto xv = svm->get_dynamic_variable< ColVariable >( "xi" );
  auto bv = svm->get_static_variable< ColVariable >( "b" );
 
  const Index m = svm->get_NFeatures();
@@ -187,11 +187,13 @@ static void fill_primal( SVMBlock * svm , const doubleVec & w , double b )
  auto & q = svm->get_dual_costs();
  auto & X = svm->get_X();
 
- for( Index k = 0 ; k < svm->get_NDual() ; ++k ) {
+ Index k = 0;
+ for( auto & xk : *xv ) {
   double f = b;
   for( Index j = 0 ; j < m ; ++j )
    f += w[ j ] * X[ std::size_t( di[ k ] ) * m + j ];
-  (*xv)[ k ].set_value( std::max( double( 0 ) , - q[ k ] - s[ k ] * f ) );
+  xk.set_value( std::max( double( 0 ) , - q[ k ] - s[ k ] * f ) );
+  ++k;
   }
 
  }  // end( fill_primal )
@@ -226,10 +228,11 @@ static void check_abstract( SVMBlock * svm , int form , double expected ,
  const Index N = svm->get_NDual();
 
  if( form == SVMBlock::kWolfeDual ) {
-  auto av = svm->get_static_variable_v< ColVariable >( "alpha" );
+  auto av = svm->get_dynamic_variable< ColVariable >( "alpha" );
   auto & alpha = svm->get_alphas();
-  for( Index k = 0 ; k < N ; ++k )
-   (*av)[ k ].set_value( alpha[ k ] );
+  Index k = 0;
+  for( auto & ak : *av )
+   ak.set_value( alpha[ k++ ] );
   }
  else
   fill_primal( svm , svm->get_w() , svm->get_b() );
@@ -409,24 +412,28 @@ static void check_change( const std::string & kind , int form ,
  check_close( objective_value( a ) , objective_value( b ) , 1e-9 ,
               what + ": the same Objective as if generated anew" );
 
- bool ok = ( a->get_static_constraints().size() ==
-             b->get_static_constraints().size() );
+ bool ok = ( a->get_dynamic_constraints().size() ==
+             b->get_dynamic_constraints().size() );
 
  if( form == SVMBlock::kWolfeDual ) {
-  auto ba = a->get_static_constraint_v< LB0Constraint >( "box" );
-  auto bb = b->get_static_constraint_v< LB0Constraint >( "box" );
+  auto ba = a->get_dynamic_constraint< LB0Constraint >( "box" );
+  auto bb = b->get_dynamic_constraint< LB0Constraint >( "box" );
   ok &= ba && bb && ( ba->size() == bb->size() );
-  if( ok )
-   for( Index k = 0 ; k < ba->size() ; ++k )
-    ok &= ( (*ba)[ k ].get_rhs() == (*bb)[ k ].get_rhs() );
+  if( ok ) {
+   auto bbk = bb->begin();
+   for( auto & bak : *ba )
+    ok &= ( bak.get_rhs() == (bbk++)->get_rhs() );
+   }
   }
  else {
-  auto ca = a->get_static_constraint_v< FRowConstraint >( "cons" );
-  auto cb = b->get_static_constraint_v< FRowConstraint >( "cons" );
+  auto ca = a->get_dynamic_constraint< FRowConstraint >( "cons" );
+  auto cb = b->get_dynamic_constraint< FRowConstraint >( "cons" );
   ok &= ca && cb && ( ca->size() == cb->size() );
-  if( ok )
-   for( Index k = 0 ; k < ca->size() ; ++k )
-    ok &= ( (*ca)[ k ].get_lhs() == (*cb)[ k ].get_lhs() );
+  if( ok ) {
+   auto cbk = cb->begin();
+   for( auto & cak : *ca )
+    ok &= ( cak.get_lhs() == (cbk++)->get_lhs() );
+   }
   }
 
  check( ok , what + ": the same Constraint as if generated anew" );
@@ -652,7 +659,7 @@ int main( int argc , char ** argv )
 
   // the structure a generic Lagrangian Solver expects
   check( ! dec->get_static_variable_v< ColVariable >( "w" ) &&
-         ! dec->get_static_variable_v< ColVariable >( "alpha" ) ,
+         ! dec->get_dynamic_variable< ColVariable >( "alpha" ) ,
          "no Variable in the father Block" );
   check( dec->get_number_nested_Blocks() == P , "one sub-Block per chunk" );
   check( dec->get_objective() &&
@@ -854,14 +861,67 @@ int main( int argc , char ** argv )
          ( svm.get_dual_signs()[ 5 ] == before ) ,
          "a rejected target changes nothing" );
 
+  /* Samples added and removed: the dual index space changes size, and the
+   * multipliers of the samples that are still there are what the
+   * re-optimization starts from. */
+
+  { doubleVec nX , ny;
+    make_svc_data( 6 , m , nX , ny , 77 );
+    svm.add_samples( 6 , nX , ny );
+    }
+  check( svm.get_NSamples() == n + 6 , "the samples are there" );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "samples added" );
+
+  svm.remove_samples( Block::Range( 3 , 9 ) );
+  check( svm.get_NSamples() == n , "the samples are gone" );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "a range of samples removed" );
+
+  svm.remove_samples( Block::Subset( { 0 , 7 , 13 , 21 } ) , true );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "a subset of samples removed" );
+
+  { doubleVec nX , ny;
+    make_svc_data( 4 , m , nX , ny , 91 );
+    svm.add_samples( 4 , nX , ny );
+    svm.remove_samples( Block::Subset( { 1 , 2 } ) , true );
+    }
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "samples added and removed in one go" );
+
+  // the whole data set cannot go, and a rejected removal changes nothing
+  { bool caught = false;
+    const Index before = svm.get_NSamples();
+    Block::Subset all( before );
+    std::iota( all.begin() , all.end() , Index( 0 ) );
+    try { svm.remove_samples( std::move( all ) , true ); }
+    catch( const std::exception & e ) { caught = true; }
+    check( caught && ( svm.get_NSamples() == before ) ,
+           "removing every sample is refused" );
+    }
+
   // the kernel and the regularisation of the bias: everything changes
   svm.set_kernel( SVMBlock::kGaussian , 0.25 );
   check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
                "the kernel changed" );
 
+  // ... and the samples still follow, with the Gram matrix of a kernel that
+  // is no longer the linear one
+  { doubleVec nX , ny;
+    make_svc_data( 5 , m , nX , ny , 43 );
+    svm.add_samples( 5 , nX , ny );
+    }
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "samples added with a nonlinear kernel" );
+
   svm.set_reg_bias( true );
   check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
                "the bias regularised" );
+
+  svm.remove_samples( Block::Range( 0 , 5 ) );
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "samples removed with the bias regularised" );
 
   svm.unregister_Solver( solver );
   delete solver;

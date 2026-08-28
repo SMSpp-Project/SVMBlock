@@ -40,6 +40,8 @@
 
 #include <iomanip>
 
+#include <map>
+
 #include <numeric>
 
 #include <thread>
@@ -611,6 +613,217 @@ void SVMBlock::copy_hyperparameters( SVMBlock * to ) const
  }  // end( SVMBlock::copy_hyperparameters )
 
 /*--------------------------------------------------------------------------*/
+
+void SVMBlock::add_samples( Index k , c_doubleVec & X , c_doubleVec & y ,
+                            ModParam issueMod , ModParam issueAMod )
+{
+ static const std::string _prfx = "SVMBlock::add_samples: ";
+
+ if( ! k )   // nothing to add
+  return;
+
+ if( X.size() < std::size_t( k ) * f_m )
+  throw( std::invalid_argument( _prfx + "X too small" ) );
+
+ if( y.size() < k )
+  throw( std::invalid_argument( _prfx + "Y too small" ) );
+
+ if( ! not_dry_run( issueMod ) )
+  return;
+
+ const Index o_n = f_n;
+ auto o_di = v_di;
+ auto o_ds = v_ds;
+
+ v_X.insert( v_X.end() , X.begin() , X.begin() + std::size_t( k ) * f_m );
+ v_y.insert( v_y.end() , y.begin() , y.begin() + k );
+ f_n += k;
+
+ /* The Gram matrix of the samples that were already there is still the right
+  * one: it is only re-laid out, the rows being longer now, and the entries
+  * of the new samples are the only ones computed. This is where the cost of
+  * an addition is much less than that of a training from scratch. */
+ if( ! v_K.empty() ) {
+  doubleVec nK( std::size_t( f_n ) * f_n );
+  for( Index i = 0 ; i < o_n ; ++i )
+   std::copy_n( v_K.begin() + std::size_t( i ) * o_n , o_n ,
+                nK.begin() + std::size_t( i ) * f_n );
+  v_K = std::move( nK );
+
+  if( f_kernel != kLinear )
+   get_gamma();   // resolved once, before the entries are computed
+
+  for( Index i = o_n ; i < f_n ; ++i )
+   for( Index j = 0 ; j <= i ; ++j ) {
+    const double kij = kernel( i , j );
+    v_K[ std::size_t( i ) * f_n + j ] = kij;
+    v_K[ std::size_t( j ) * f_n + i ] = kij;
+    }
+  }
+
+ try {
+  set_dual_data();   // the parametric map of the new data set
+  }
+ catch( ... ) {      // a target the concrete class refuses: put it all back
+  v_X.resize( std::size_t( o_n ) * f_m );
+  v_y.resize( o_n );
+  f_n = o_n;
+  v_K.clear();
+  set_dual_data();
+  throw;
+  }
+
+ // the samples that were there are still there, and in the same place
+ Subset o_smpl( f_n );
+ std::iota( o_smpl.begin() , o_smpl.begin() + o_n , Index( 0 ) );
+ std::fill( o_smpl.begin() + o_n , o_smpl.end() , Inf< Index >() );
+
+ remap_model( o_di , o_ds , o_smpl );
+
+ // the size of the problem has changed, hence the abstract representation
+ // is rebuilt and the NBModification says that everything has to be re-read
+ update_abstract( eARAll , issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockRngdMod >(
+                            this , SVMBlockMod::eAddSamples ,
+                            Range( o_n , f_n ) ) ,
+                           Observer::par2chnl( issueMod ) );
+
+ }  // end( SVMBlock::add_samples )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::remove_samples( Range rng , ModParam issueMod ,
+                               ModParam issueAMod )
+{
+ rng.second = std::min( rng.second , f_n );
+ if( rng.second <= rng.first )   // nothing to remove
+  return;
+
+ Subset nms( rng.second - rng.first );
+ std::iota( nms.begin() , nms.end() , rng.first );
+
+ remove_samples( std::move( nms ) , true , issueMod , issueAMod );
+
+ }  // end( SVMBlock::remove_samples( Range ) )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::remove_samples( Subset && nms , bool ordered ,
+                               ModParam issueMod , ModParam issueAMod )
+{
+ static const std::string _prfx = "SVMBlock::remove_samples: ";
+
+ if( nms.empty() )   // nothing to remove
+  return;
+
+ if( ! ordered ) {
+  std::sort( nms.begin() , nms.end() );
+  nms.erase( std::unique( nms.begin() , nms.end() ) , nms.end() );
+  }
+
+ if( nms.back() >= f_n )
+  throw( std::invalid_argument( _prfx + "invalid sample" ) );
+
+ if( nms.size() >= f_n )
+  throw( std::invalid_argument( _prfx + "a SVMBlock with no sample is not a "
+                                "training problem: use load() to replace the "
+                                "data set" ) );
+
+ if( ! not_dry_run( issueMod ) )
+  return;
+
+ const Index o_n = f_n;
+ auto o_di = v_di;
+ auto o_ds = v_ds;
+
+ // which old sample each surviving one was, in the order they survive in
+ Subset o_smpl;
+ o_smpl.reserve( o_n - nms.size() );
+ { auto rmv = nms.begin();
+   for( Index i = 0 ; i < o_n ; ++i )
+    if( ( rmv != nms.end() ) && ( *rmv == i ) )
+     ++rmv;
+    else
+     o_smpl.push_back( i );
+   }
+
+ // the samples, the targets and the Gram matrix are compacted, not recomputed
+ for( Index i = 0 ; i < o_smpl.size() ; ++i ) {
+  if( o_smpl[ i ] != i ) {
+   std::copy_n( v_X.begin() + std::size_t( o_smpl[ i ] ) * f_m , f_m ,
+                v_X.begin() + std::size_t( i ) * f_m );
+   v_y[ i ] = v_y[ o_smpl[ i ] ];
+   }
+  }
+
+ f_n = o_smpl.size();
+ v_X.resize( std::size_t( f_n ) * f_m );
+ v_y.resize( f_n );
+
+ if( ! v_K.empty() ) {
+  doubleVec nK( std::size_t( f_n ) * f_n );
+  for( Index i = 0 ; i < f_n ; ++i )
+   for( Index j = 0 ; j < f_n ; ++j )
+    nK[ std::size_t( i ) * f_n + j ] =
+     v_K[ std::size_t( o_smpl[ i ] ) * o_n + o_smpl[ j ] ];
+  v_K = std::move( nK );
+  }
+
+ set_dual_data();
+
+ remap_model( o_di , o_ds , o_smpl );
+
+ update_abstract( eARAll , issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockSbstMod >(
+                            this , SVMBlockMod::eRmvSamples ,
+                            std::move( nms ) ) ,
+                           Observer::par2chnl( issueMod ) );
+
+ }  // end( SVMBlock::remove_samples( Subset ) )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::remap_model( const IndexVec & o_di , const doubleVec & o_ds ,
+                            const Subset & o_smpl )
+{
+ v_dcoef.clear();   // the coefficients of the model follow the samples
+
+ auto & alpha = f_training_Results->v_alpha;
+ if( alpha.empty() ) {   // there is no model to realign
+  alpha.assign( get_NDual() , 0 );
+  return;
+  }
+
+ /* Which old dual index each new one was: the two are matched by the sample
+  * they refer to and by their sign, which is all that identifies a dual index
+  * [see the comments to SVMBlock for the dual index space]. */
+
+ std::map< std::pair< Index , bool > , Index > o_k;
+ for( Index k = 0 ; k < o_di.size() ; ++k )
+  o_k[ { o_di[ k ] , o_ds[ k ] > 0 } ] = k;
+
+ doubleVec n_alpha( get_NDual() , 0 );
+ for( Index k = 0 ; k < n_alpha.size() ; ++k ) {
+  const Index i = o_smpl[ v_di[ k ] ];
+  if( i == Inf< Index >() )   // a new sample: its multiplier starts at zero
+   continue;
+  auto it = o_k.find( { i , v_ds[ k ] > 0 } );
+  if( ( it != o_k.end() ) && ( it->second < alpha.size() ) )
+   n_alpha[ k ] = alpha[ it->second ];
+  }
+
+ alpha = std::move( n_alpha );
+
+ // the model is no longer the one of a primal, the samples having changed
+ f_training_Results->v_w.clear();
+
+ }  // end( SVMBlock::remap_model )
+
+/*--------------------------------------------------------------------------*/
 /*------------- REALIGNING THE ABSTRACT REPRESENTATION ---------------------*/
 /*--------------------------------------------------------------------------*/
 
@@ -707,9 +920,12 @@ void SVMBlock::update_abstract_sides( ModParam issueAMod )
  if( ! ( AR & PrimalF ) )  // the dual has no side depending on the data
   return;
 
- for( Index k = 0 ; k < v_cons.size() ; ++k )
-  if( v_cons[ k ].get_lhs() != - v_dq[ k ] )
-   v_cons[ k ].set_lhs( - v_dq[ k ] , un_ModBlock( issueAMod ) );
+ Index k = 0;
+ for( auto & ck : v_cons ) {
+  if( ck.get_lhs() != - v_dq[ k ] )
+   ck.set_lhs( - v_dq[ k ] , un_ModBlock( issueAMod ) );
+  ++k;
+  }
 
  }  // end( SVMBlock::update_abstract_sides )
 
@@ -1128,7 +1344,7 @@ void SVMBlock::generate_abstract_variables( Configuration * stvv )
   for( auto & ak : v_alpha_var )
    ak.set_type( ColVariable::kContinuous );
 
-  add_static_variable( v_alpha_var , "alpha" );
+  add_dynamic_variable( v_alpha_var , "alpha" );
   }
  else {                    // the training problem itself- - - - - - - - - - -
                            //- - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1145,7 +1361,7 @@ void SVMBlock::generate_abstract_variables( Configuration * stvv )
   v_xi.resize( N );
   for( auto & xk : v_xi )
    xk.set_type( ColVariable::kContinuous );
-  add_static_variable( v_xi , "xi" );
+  add_dynamic_variable( v_xi , "xi" );
   }
 
  AR |= HasVar;
@@ -1218,17 +1434,21 @@ void SVMBlock::generate_abstract_constraints( Configuration * stcc )
   const double ub = get_ub();
 
   v_box.resize( N );
-  for( Index k = 0 ; k < N ; ++k ) {
-   v_box[ k ].set_variable( & v_alpha_var[ k ] );
-   v_box[ k ].set_rhs( ub );
-   }
+  { auto ak = v_alpha_var.begin();
+    for( auto & bk : v_box ) {
+     bk.set_variable( &(*(ak++)) );
+     bk.set_rhs( ub );
+     }
+    }
 
-  add_static_constraint( v_box , "box" );
+  add_dynamic_constraint( v_box , "box" );
 
   if( ! f_reg_bias ) {  // s^T alpha = 0
    v_coeff_pair coeffs( N );
-   for( Index k = 0 ; k < N ; ++k )
-    coeffs[ k ] = std::make_pair( & v_alpha_var[ k ] , v_ds[ k ] );
+   { auto ak = v_alpha_var.begin();
+     for( Index k = 0 ; k < N ; ++k )
+      coeffs[ k ] = std::make_pair( &(*(ak++)) , v_ds[ k ] );
+     }
 
    f_eq.set_both( 0 );
    f_eq.set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
@@ -1239,30 +1459,36 @@ void SVMBlock::generate_abstract_constraints( Configuration * stcc )
  else {                      // the primal formulation - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
   v_xi_box.resize( N );
-  for( Index k = 0 ; k < N ; ++k )
-   v_xi_box[ k ].set_variable( & v_xi[ k ] );
+  { auto xk = v_xi.begin();
+    for( auto & bk : v_xi_box )
+     bk.set_variable( &(*(xk++)) );
+    }
 
-  add_static_constraint( v_xi_box , "xibox" );
+  add_dynamic_constraint( v_xi_box , "xibox" );
 
   // s_k ( < w , x_{ i( k ) } > + b ) + xi_k >= r_k
   v_cons.resize( N );
-  for( Index k = 0 ; k < N ; ++k ) {
-   const double sk = v_ds[ k ];
-   const double * xi = get_x( v_di[ k ] );
+  { auto xk = v_xi.begin();
+    Index k = 0;
+    for( auto & ck : v_cons ) {
+     const double sk = v_ds[ k ];
+     const double * xi = get_x( v_di[ k ] );
 
-   v_coeff_pair coeffs( f_m + 2 );
-   for( Index j = 0 ; j < f_m ; ++j )
-    coeffs[ j ] = std::make_pair( & v_w[ j ] , sk * xi[ j ] );
+     v_coeff_pair coeffs( f_m + 2 );
+     for( Index j = 0 ; j < f_m ; ++j )
+      coeffs[ j ] = std::make_pair( & v_w[ j ] , sk * xi[ j ] );
 
-   coeffs[ f_m ] = std::make_pair( & f_b_var , sk );
-   coeffs[ f_m + 1 ] = std::make_pair( & v_xi[ k ] , double( 1 ) );
+     coeffs[ f_m ] = std::make_pair( & f_b_var , sk );
+     coeffs[ f_m + 1 ] = std::make_pair( &(*(xk++)) , double( 1 ) );
 
-   v_cons[ k ].set_lhs( - v_dq[ k ] );
-   v_cons[ k ].set_rhs( Inf< RowConstraint::RHSValue >() );
-   v_cons[ k ].set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
-   }
+     ck.set_lhs( - v_dq[ k ] );
+     ck.set_rhs( Inf< RowConstraint::RHSValue >() );
+     ck.set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
+     ++k;
+     }
+    }
 
-  add_static_constraint( v_cons , "cons" );
+  add_dynamic_constraint( v_cons , "cons" );
   }
 
  AR |= HasCns;
@@ -1317,12 +1543,14 @@ void SVMBlock::generate_objective( Configuration * objc )
   const double d = f_squared_loss ? 1 / ( 2 * f_C ) : 0;
 
   v_coeff_triple triples( N );
-  for( Index k = 0 ; k < N ; ++k ) {
-   const double sk = v_ds[ k ];
-   const double Kkk = K[ std::size_t( v_di[ k ] ) * f_n + v_di[ k ] ];
-   triples[ k ] = std::make_tuple( & v_alpha_var[ k ] , - v_dq[ k ] ,
-                                   - ( sk * sk * ( Kkk + rb ) + d ) / 2 );
-   }
+  { auto ak = v_alpha_var.begin();
+    for( Index k = 0 ; k < N ; ++k , ++ak ) {
+     const double sk = v_ds[ k ];
+     const double Kkk = K[ std::size_t( v_di[ k ] ) * f_n + v_di[ k ] ];
+     triples[ k ] = std::make_tuple( &(*ak) , - v_dq[ k ] ,
+                                     - ( sk * sk * ( Kkk + rb ) + d ) / 2 );
+     }
+    }
 
   v_off_diag_term off_diag;
   off_diag.reserve( ( std::size_t( N ) * ( N - 1 ) ) / 2 );
@@ -1361,10 +1589,12 @@ void SVMBlock::generate_objective( Configuration * objc )
   triples[ f_m ] = std::make_tuple( & f_b_var , double( 0 ) ,
                                     f_reg_bias ? rw : double( 0 ) );
 
-  for( Index k = 0 ; k < N ; ++k )
-   triples[ f_m + 1 + k ] =
-    std::make_tuple( & v_xi[ k ] , f_squared_loss ? double( 0 ) : f_C ,
-                     f_squared_loss ? f_C : double( 0 ) );
+  { Index k = 0;
+    for( auto & xk : v_xi )
+     triples[ f_m + 1 + k++ ] =
+      std::make_tuple( &xk , f_squared_loss ? double( 0 ) : f_C ,
+                       f_squared_loss ? f_C : double( 0 ) );
+    }
 
   f_obj.set_function( new DQuadFunction( std::move( triples ) , 0 ) ,
                       eNoMod );
@@ -1440,8 +1670,10 @@ void SVMBlock::get_solution_from_abstract( void )
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
   f_training_Results->v_alpha.resize( v_alpha_var.size() );
-  for( Index k = 0 ; k < v_alpha_var.size() ; ++k )
-   f_training_Results->v_alpha[ k ] = v_alpha_var[ k ].get_value();
+  { Index k = 0;
+    for( auto & ak : v_alpha_var )
+     f_training_Results->v_alpha[ k++ ] = ak.get_value();
+    }
 
   f_training_Results->v_w.clear();
   compute_bias();
@@ -1485,8 +1717,9 @@ void SVMBlock::set_solution_in_abstract( void )
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                                            //- - - - - - - - - - - - - - - - -
   auto & alpha = f_training_Results->v_alpha;
-  for( Index k = 0 ; k < v_alpha_var.size() ; ++k )
-   v_alpha_var[ k ].set_value( k < alpha.size() ? alpha[ k ] : 0 );
+  Index k = 0;
+  for( auto & ak : v_alpha_var )
+   ak.set_value( k < alpha.size() ? alpha[ k++ ] : 0 );
 
   return;
   }
@@ -1505,16 +1738,19 @@ void SVMBlock::set_solution_in_abstract( void )
 
  // the slacks are the smallest values that make the model feasible, which is
  // what they are worth at any optimal solution of the primal
- for( Index k = 0 ; k < v_xi.size() ; ++k ) {
-  const double * xi = get_x( v_di[ k ] );
+ { Index k = 0;
+   for( auto & xk : v_xi ) {
+    const double * xi = get_x( v_di[ k ] );
 
-  double f = f_training_Results->f_b;
-  for( Index j = 0 ; j < f_m ; ++j )
-   f += w[ j ] * xi[ j ];
+    double f = f_training_Results->f_b;
+    for( Index j = 0 ; j < f_m ; ++j )
+     f += w[ j ] * xi[ j ];
 
-  v_xi[ k ].set_value( std::max( double( 0 ) ,
-                                 - v_dq[ k ] - v_ds[ k ] * f ) );
-  }
+    xk.set_value( std::max( double( 0 ) ,
+                            - v_dq[ k ] - v_ds[ k ] * f ) );
+    ++k;
+    }
+   }
 
  }  // end( SVMBlock::set_solution_in_abstract )
 
@@ -1744,6 +1980,8 @@ void SVMBlock::delete_abstract( void )
 
  reset_static_constraints();
  reset_static_variables();
+ reset_dynamic_constraints();
+ reset_dynamic_variables();
  reset_objective();
 
  // the structure survives the abstract representation: it says which Block

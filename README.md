@@ -50,6 +50,17 @@ Note that the `SVMBlock` still holds the whole data set, so a `Solver` reading
 the physical representation, such as `SMOSolver`, keeps solving the very same
 training problem whatever the structure.
 
+Samples can also be *added* to and *removed* from the data set at any time,
+which is what an incremental training and a k-fold cross-validation done by
+taking a fold out and putting it back need [see `add_samples()` and
+`remove_samples()`]. The samples that are already there are not touched: their
+multipliers keep their value, and what the Gram matrix already holds is kept,
+only the entries of the new samples being computed. Whatever is indexed over
+the dual index space is therefore *dynamic*, i.e., the multipliers and their
+bounds in the dual, the slacks with their bounds and the margin constraints in
+the primal; the weights and the bias are indexed over the features, which do
+not change, and are static.
+
 The hyper-parameters and the targets can be changed at any time, also while a
 `Solver` is attached and the abstract representation is constructed: the
 `Block` updates the latter and issues both the *physical* `Modification`
@@ -87,7 +98,13 @@ only
 requires the multipliers to be scaled back into their bounds and the gradient
 to be updated in linear time, so that the re-optimization starts from the
 previous solution and a model selection costs much less than the sum of the
-individual trainings. The two-multiplier step is the one of
+individual trainings. Samples being added or removed is followed as well: the
+multipliers of those that are still there are kept, matched to the dual index
+space of the new data set by the sample and the sign they refer to, those of
+the new samples start at zero, the equality constraint is made to hold again
+by giving back to the multipliers that can absorb it whatever a removal has
+left in excess, and the gradient is recomputed with one pass over the Gram
+matrix, which has been extended or compacted rather than recomputed. The two-multiplier step is the one of
 
 J. C. Platt "Sequential Minimal Optimization: A Fast Algorithm for Training
 Support Vector Machines" *Microsoft Research technical report* MSR-TR-98-14,
