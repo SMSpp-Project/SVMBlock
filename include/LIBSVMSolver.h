@@ -144,19 +144,23 @@ class LIBSVMSolver : public Solver
  void set_Block( Block * block ) override;
 
 /*--------------------------------------------------------------------------*/
- /// LIBSVM cannot re-optimize, hence Modification are not remembered
+ /// LIBSVM cannot re-optimize, hence a Modification only says "train again"
  /** LIBSVM trains from scratch, and compute() re-reads the data set and the
-  * hyper-parameters out of the SVMBlock each time: what has changed in the
-  * meanwhile therefore makes no difference, and the Modification is dropped
-  * rather than being queued for a re-optimization that cannot happen. */
+  * hyper-parameters out of the SVMBlock each time: *what* has changed in the
+  * meanwhile therefore makes no difference, and the Modification is not
+  * queued for a re-optimization that cannot happen. It is not ignored
+  * either, though: it is what says that the training has to be done again,
+  * so that a compute() with nothing changed in between costs nothing, as it
+  * is supposed to. */
 
- void add_Modification( sp_Mod & mod ) override {}
+ void add_Modification( sp_Mod & mod ) override { f_dirty = true; }
 
 /*--------------------------------------------------------------------------*/
  /// trains the SVM with LIBSVM
  /** Hands the training problem of the SVMBlock over to LIBSVM, which solves
-  * it from scratch. Throws exception if the training problem is not one
-  * LIBSVM can be asked, see the comments to the class. */
+  * it from scratch; it returns at once if nothing has changed since the
+  * previous call. Throws exception if the training problem is not one LIBSVM
+  * can be asked, see the comments to the class. */
 
  int compute( bool changedvars = true ) override;
 
@@ -353,6 +357,7 @@ class LIBSVMSolver : public Solver
  int f_log_verb = 0;           ///< nonzero for LIBSVM to print its log
 
  bool f_solved = false;        ///< true if a solution is available
+ bool f_dirty = true;          ///< true if the SVMBlock has changed since
  double f_value = 0;           ///< the value of the dual at the solution
  double f_b = 0;               ///< the bias of the model
 

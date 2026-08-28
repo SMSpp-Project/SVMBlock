@@ -61,6 +61,7 @@ void LIBSVMSolver::set_Block( Block * block )
 
  free_model();
  f_solved = false;
+ f_dirty = true;
  f_value = 0;
  f_b = 0;
  v_alpha.clear();
@@ -87,6 +88,9 @@ int LIBSVMSolver::compute( bool changedvars )
 {
  if( ! f_SVM )
   throw( std::logic_error( "LIBSVMSolver::compute: no SVMBlock is set" ) );
+
+ if( f_solved && ( ! f_dirty ) )   // nothing has changed since the last
+  return( kOK );                  // call, hence there is nothing to do
 
  lock();  // lock the mutex
 
@@ -135,6 +139,7 @@ int LIBSVMSolver::compute( bool changedvars )
  extract_model();
 
  f_solved = true;
+ f_dirty = false;
 
  unlock();  // unlock the mutex
 
