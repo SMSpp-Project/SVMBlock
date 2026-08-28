@@ -1466,12 +1466,16 @@ void SVMBlock::set_solution_in_abstract( void )
   return;
 
  if( AR & Consensus ) {
-  // the model goes into every chunk, which is what the consensus constraints
-  // ask of them
+  /* The model goes into every chunk, which is what the consensus constraints
+   * ask of them. It is written as the weights, which is the only form the
+   * primal of a chunk has: get_w() computes them out of the multipliers when
+   * the model rather comes from a dual, as it does when the SVMBlock has
+   * been solved by SMOSolver, which ignores the structure. */
+  auto w = get_w();
+
   for( auto blk : v_Block ) {
    auto sub = static_cast< SVMBlock * >( blk );
-   sub->set_primal_solution( doubleVec( f_training_Results->v_w ) ,
-                             f_training_Results->f_b );
+   sub->set_primal_solution( doubleVec( w ) , f_training_Results->f_b );
    sub->set_solution_in_abstract();
    }
 

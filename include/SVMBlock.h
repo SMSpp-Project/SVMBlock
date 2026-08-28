@@ -696,12 +696,16 @@ class SVMBlock : public Block
 
  /// returns which problem the abstract representation encodes
  /** Returns which of the values of svm_problem the abstract representation
-  * encodes, or -1 if none has been generated yet. */
+  * encodes, or -1 if none has been generated yet. With the consensus
+  * structure [see set_structure()] it is the problem the *chunks* encode,
+  * i.e., the primal, the SVMBlock having no Variable of its own. */
 
  int get_generated_problem( void ) const
  {
   if( ! ( AR & HasVar ) )
    return( -1 );
+  if( AR & Consensus )
+   return( kPrimal );
   return( ( AR & PrimalF ) ? kPrimal : kWolfeDual );
   }
 
