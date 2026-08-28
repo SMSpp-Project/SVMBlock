@@ -45,12 +45,30 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 # See: https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html
 include(BuildType)
 
+# ----- Settings ------------------------------------------------------------ #
+option(SVMBlock_USE_LIBSVM "Whether SVMBlock will use LIBSVM or not." ON)
+
 # ----- Requirements -------------------------------------------------------- #
 # If it's not being called by the umbrella, we need to
 # look for the system-installed libraries.
 if (NOT hasParent)
     find_package(SMS++ REQUIRED)
 endif ()
+
+if (SVMBlock_USE_LIBSVM)
+    # Needed for LIBSVMSolver
+    find_package(LIBSVM 3.0)
+    if (NOT LIBSVM_FOUND)
+        set(SVMBlock_USE_LIBSVM OFF)
+    endif ()
+endif ()
+
+# Whether LIBSVMSolver is in the library, which whoever uses SVMBlock has to
+# know: the tests only run the batch that attaches it when it is there. It is
+# a cache entry because LIBSVM_FOUND, being set by find_package(), only lives
+# in this directory.
+set(SVMBlock_HAS_LIBSVM ${SVMBlock_USE_LIBSVM}
+    CACHE INTERNAL "Whether SVMBlock was built with LIBSVM.")
 
 # ----- Configuration header ------------------------------------------------ #
 # This will generate a *Config.h header in the build directory.
@@ -100,6 +118,12 @@ target_include_directories(
 # library, INTERFACE means they will be linked only to the targets that depend
 # on this library.
 target_link_libraries(${modName} PUBLIC ${modNamespace}::SMS++)
+
+if (SVMBlock_USE_LIBSVM)
+    message(STATUS "SVMBlock: LIBSVM found, configuring LIBSVMSolver")
+    target_sources(${modName} PRIVATE src/LIBSVMSolver.cpp)
+    target_link_libraries(${modName} PUBLIC LIBSVM::LIBSVM)
+endif ()
 
 # This alias is defined so that executables in this same project can use
 # the library with this notation.

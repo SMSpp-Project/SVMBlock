@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `LIBSVMSolver`, which hands the training problem over to LIBSVM: an
+  independent implementation of the very algorithm `SMOSolver` implements,
+  hence a reference to check it against, and a fast one for a large data set.
+  It reads the physical representation, recovers the multipliers, the bias and
+  the value out of the kernel expansion LIBSVM returns, and refuses the
+  training problems LIBSVM cannot express rather than approximating them. It
+  is built only when LIBSVM is found
+
 - `SVMBlockMod`, `SVMBlockRngdMod` and `SVMBlockSbstMod`, the Modification
   describing a change of the training problem, and the abstract Modification
   issued alongside them; the hyper-parameters can therefore now be changed

@@ -30,14 +30,16 @@
 SVMBkOBJ = $(SVMBkSDR)/obj/SVMBlock.o \
 	$(SVMBkSDR)/obj/SVCBlock.o \
 	$(SVMBkSDR)/obj/SVRBlock.o \
-	$(SVMBkSDR)/obj/SMOSolver.o
+	$(SVMBkSDR)/obj/SMOSolver.o \
+	$(SVMBkSDR)/obj/LIBSVMSolver.o
 
 SVMBkINC = -I$(SVMBkSDR)/include
 
 SVMBkH   = $(SVMBkSDR)/include/SVMBlock.h \
 	$(SVMBkSDR)/include/SVCBlock.h \
 	$(SVMBkSDR)/include/SVRBlock.h \
-	$(SVMBkSDR)/include/SMOSolver.h
+	$(SVMBkSDR)/include/SMOSolver.h \
+	$(SVMBkSDR)/include/LIBSVMSolver.h
 
 # clean - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -68,5 +70,12 @@ $(SVMBkSDR)/obj/SMOSolver.o: $(SVMBkSDR)/src/SMOSolver.cpp \
 	$(SMS++H) $(SMS++OBJ)
 	$(CC) -c $(SVMBkSDR)/src/SMOSolver.cpp -o $@ \
 	$(SVMBkINC) $(SMS++INC) $(SW)
+
+$(SVMBkSDR)/obj/LIBSVMSolver.o: $(SVMBkSDR)/src/LIBSVMSolver.cpp \
+	$(SVMBkSDR)/include/LIBSVMSolver.h $(SVMBkSDR)/include/SVCBlock.h \
+	$(SVMBkSDR)/include/SVRBlock.h $(SVMBkSDR)/include/SVMBlock.h \
+	$(SMS++H) $(SMS++OBJ)
+	$(CC) -c $(SVMBkSDR)/src/LIBSVMSolver.cpp -o $@ \
+	$(SVMBkINC) $(libLIBSVMINC) $(SMS++INC) $(SW)
 
 ########################## End of makefile ###################################

@@ -37,6 +37,9 @@
 # *H   is the list of all include files
 # *INC is the -I< include directories >
 
+# include makefile for libLIBSVM
+include $(SVMBkSDR)/../extlib/makefile-libLIBSVM
+
 # include the makefile requiring all external modules in input
 include $(SVMBkSDR)/makefile
 
@@ -45,9 +48,9 @@ include $(SVMBkSDR)/makefile
 # append external -I directives to SVMBkINC, SVMBkOBJ and SVMBkH as defined
 # by the makefile, thus the := assignment has to be used (use GNU make)
 SVMBkOBJ := $(SVMBkOBJ)
-SVMBkINC := $(SVMBkINC)
+SVMBkINC := $(SVMBkINC) $(libLIBSVMINC)
 
 # external libraries for SVMBlock
-SVMBkLIB =
+SVMBkLIB = $(libLIBSVMLIB)
 
 ############################ End of makefile #################################

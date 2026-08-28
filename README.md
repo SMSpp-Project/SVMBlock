@@ -2,7 +2,8 @@
 
 Definition and implementation of the `SVMBlock` class, which implements the
 `Block` interface within the SMS++ framework for the training problem of a
-*Support Vector Machine* (SVM), together with the ad hoc `SMOSolver`.
+*Support Vector Machine* (SVM), together with the ad hoc `SMOSolver` and with
+`LIBSVMSolver`, which hands the training problem over to LIBSVM.
 
 Two concrete classes derive from the abstract `SVMBlock`: `SVCBlock`, for the
 *Support Vector Classifier*, i.e., the maximum-margin hyperplane separating the
@@ -104,6 +105,22 @@ to the SMO Algorithm for SVM Regression" *IEEE Transactions on Neural Networks*
 since a regression sample contributes two multipliers with opposite signs,
 whence the two sides of its insensitivity tube.
 
+`LIBSVMSolver` hands the training problem over to
+[LIBSVM](https://www.csie.ntu.edu.tw/~cjlin/libsvm/), the reference
+implementation of the very algorithm `SMOSolver` implements: it is therefore
+an independent implementation to check the latter against on any data set, and
+a mature and fast one when the data set is large. Like `SMOSolver` it reads
+the physical representation, and it recovers the multipliers, the bias and the
+value of the training problem out of what LIBSVM returns, which is the kernel
+expansion of the model. LIBSVM solves a smaller family of training problems
+than a `SVMBlock` can encode: the loss has to be the linear one, the bias has
+to be out of the regularisation term, the weight of that term has to be 1 and
+the kernel cannot be the Laplacian one. Anything else is refused rather than
+approximated, since the value and the model this `Solver` reports are meant to
+be compared with those of the ones that solve the very problem. It is built
+only when LIBSVM is found, everything else in the module requiring nothing
+beyond the core.
+
 Solving the consensus rewriting needs modules this one does not depend on: the
 `SVMBlock` suite of the [tests](https://gitlab.com/smspp/tests) repo does it
 with `LagrangianDualSolver`, `BundleSolver` and a `:MILPSolver`, and the
@@ -120,6 +137,12 @@ your system.
 
 - The [SMS++ core library](https://gitlab.com/smspp/smspp) and its
   requirements.
+
+- [LIBSVM](https://www.csie.ntu.edu.tw/~cjlin/libsvm/), optional and only
+  needed by `LIBSVMSolver`, which is left out of the library when it is not
+  found. Any version from 3.0 on does: `sudo apt install libsvm-dev` on
+  Debian/Ubuntu, `brew install libsvm` on macOS, `vcpkg install libsvm` on
+  Windows.
 
 ### Build and install with CMake
 

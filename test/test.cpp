@@ -1096,6 +1096,168 @@ int main( int argc , char ** argv )
   delete solver;
   }
 
+ // LIBSVM, when the module has been built with it - - - - - - - - - - - - -
+
+ if( auto probe = Solver::new_Solver( "LIBSVMSolver" ) ) {
+  delete probe;
+
+  std::cout << "LIBSVMSolver" << std::endl;
+
+  /* LIBSVM is an independent implementation of the very algorithm SMOSolver
+   * implements, hence the check is that the two agree: same value, same
+   * model, and the multipliers LIBSVM is made to give back must be worth,
+   * according to the SVMBlock itself, the value the Solver reports. */
+
+  auto same_as_SMO = [ & ]( SVMBlock * svm , const std::string & tag ) {
+   const double value = train( svm );          // SMOSolver, tolerance 1e-10
+   const doubleVec alpha = svm->get_alphas();
+   const double b = svm->get_b();
+
+   /* LIBSVMSolver is only there when the module has been built with LIBSVM,
+    * hence everything here goes through the factory and the parameters are
+    * set by name, exactly as a configuration file would do. */
+   auto solver = Solver::new_Solver( "LIBSVMSolver" );
+   solver->set_par( solver->dbl_par_str2idx( "dblLSVMTol" ) , 1e-9 );
+   svm->register_Solver( solver );
+
+   const int status = solver->compute();
+   check( status == Solver::kOK , "LIBSVM solves, " + tag );
+
+   check_close( solver->get_var_value() , value , 1e-6 ,
+                "LIBSVM agrees with SMO on the value, " + tag );
+
+   solver->get_var_solution();
+
+   check_close( svm->dual_objective( svm->get_alphas() ) ,
+                solver->get_var_value() , 1e-6 ,
+                "the multipliers of LIBSVM are worth what it says, " + tag );
+
+   double dm = std::abs( svm->get_b() - b );
+   for( Index k = 0 ; k < alpha.size() ; ++k )
+    dm = std::max( dm , std::abs( svm->get_alphas()[ k ] - alpha[ k ] ) );
+   check( dm < 1e-5 , "LIBSVM finds the same model as SMO, " + tag );
+
+   // the model also comes out without going through the SVMBlock
+   SimpleConfiguration< int > model_cfg( 3 );
+   auto sol = dynamic_cast< SVMBlockSolution * >(
+                                       solver->get_Solution( & model_cfg ) );
+   check( sol && ( sol->get_alphas() == svm->get_alphas() ) &&
+          ( sol->get_b() == svm->get_b() ) ,
+          "LIBSVM fills the SVMBlockSolution itself, " + tag );
+   delete sol;
+
+   svm->unregister_Solver( solver );
+   delete solver;
+   };
+
+  {
+   doubleVec X , y;
+   make_svc_data( 60 , 3 , X , y , 1 );
+
+   SVCBlock svm;
+   svm.set_kernel( SVMBlock::kLinear );
+   svm.set_C( 10 );
+   svm.load( 60 , 3 , X , y );
+   same_as_SMO( & svm , "linear SVC" );
+   check( accuracy( & svm ) == 1 , "LIBSVM separates the data" );
+
+   /* LIBSVM solves the two-class problem with the *first* label it meets in
+    * the data set as the positive one, so that its decision function is the
+    * opposite of ours whenever that label is -1: the very same data set with
+    * the two classes swapped takes the other branch. */
+   for( auto & yi : y )
+    yi = - yi;
+
+   SVCBlock swapped;
+   swapped.set_kernel( SVMBlock::kLinear );
+   swapped.set_C( 10 );
+   swapped.load( 60 , 3 , X , y );
+   same_as_SMO( & swapped , "linear SVC, classes swapped" );
+   }
+
+  {
+   doubleVec X , y;
+   make_xor_data( X , y , 5 );
+   const Index n = y.size();
+
+   SVCBlock svm;
+   svm.set_kernel( SVMBlock::kGaussian , 1 );
+   svm.set_C( 10 );
+   svm.load( n , 2 , X , y );
+   same_as_SMO( & svm , "Gaussian SVC" );
+   }
+
+  {
+   doubleVec X , y;
+   make_svr_data( 40 , 3 , X , y , 3 );
+
+   SVRBlock svm;
+   svm.set_kernel( SVMBlock::kLinear );
+   svm.set_C( 8 );
+   svm.set_epsilon( 0.1 );
+   svm.load( 40 , 3 , X , y );
+   same_as_SMO( & svm , "linear SVR" );
+   }
+
+  {
+   doubleVec X , y;
+   make_svr_data( 30 , 2 , X , y , 4 );
+
+   SVRBlock svm;
+   svm.set_kernel( SVMBlock::kPoly , 0.5 , 3 , 1 );
+   svm.set_C( 4 );
+   svm.set_epsilon( 0.2 );
+   svm.load( 30 , 2 , X , y );
+   same_as_SMO( & svm , "polynomial SVR" );
+   }
+
+  /* What LIBSVM cannot be asked has to be refused, and loudly: an
+   * approximation of the training problem that has been asked for would be
+   * worse than an error. */
+
+  auto refuses = [ & ]( SVMBlock * svm , const std::string & tag ) {
+   auto solver = Solver::new_Solver( "LIBSVMSolver" );
+   bool thrown = false;
+   try {
+    solver->set_Block( svm );
+    solver->compute();
+    }
+   catch( const std::exception & ) { thrown = true; }
+   check( thrown , "LIBSVM refuses " + tag );
+   solver->set_Block( nullptr );
+   delete solver;
+   };
+
+  {
+   doubleVec X , y;
+   make_svc_data( 20 , 2 , X , y , 9 );
+
+   SVCBlock sl;
+   sl.set_C( 1 );
+   sl.set_squared_loss( true );
+   sl.load( 20 , 2 , X , y );
+   refuses( & sl , "the squared loss" );
+
+   SVCBlock rb;
+   rb.set_C( 1 );
+   rb.set_reg_bias( true );
+   rb.load( 20 , 2 , X , y );
+   refuses( & rb , "the regularised bias" );
+
+   SVCBlock rw;
+   rw.set_C( 1 );
+   rw.set_reg_weight( 0.5 );
+   rw.load( 20 , 2 , X , y );
+   refuses( & rw , "a weight on the regularisation term" );
+
+   SVCBlock lp;
+   lp.set_C( 1 );
+   lp.set_kernel( SVMBlock::kLaplacian , 1 );
+   lp.load( 20 , 2 , X , y );
+   refuses( & lp , "the Laplacian kernel" );
+   }
+  }
+
  // the netCDF round trip - - - - - - - - - - - - - - - - - - - - - - - - - -
 
  std::cout << "serialization" << std::endl;
