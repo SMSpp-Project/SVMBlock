@@ -634,7 +634,21 @@ int main( int argc , char ** argv )
   const auto w = ref.get_w();
   const double b = ref.get_b();
 
-  auto dec = make_consensus_Block( & ref , P );
+  /* The rewriting is a *structure* the SVMBlock is given, i.e., the P chunks
+   * are its sub-Block, and it is chosen exactly as any other structure is,
+   * through set_structure(); the abstract representation follows. */
+  SVCBlock cns;
+  cns.set_kernel( SVMBlock::kLinear );
+  cns.set_C( 3 );
+  cns.load( n , m , X , y );
+
+  SimpleConfiguration< int > chunks( P );
+  cns.set_structure( & chunks );
+  cns.generate_abstract_variables();
+  cns.generate_abstract_constraints();
+  cns.generate_objective();
+
+  Block * dec = & cns;
 
   // the structure a generic Lagrangian Solver expects
   check( ! dec->get_static_variable_v< ColVariable >( "w" ) &&
@@ -644,6 +658,7 @@ int main( int argc , char ** argv )
   check( dec->get_objective() &&
          ( dec->get_objective()->get_num_active_var() == 0 ) ,
          "the Objective of the father Block is empty" );
+  check( cns.get_NChunks() == P , "the SVMBlock says how many chunks" );
 
   auto link = dec->get_static_constraint_v< FRowConstraint >( "link" );
   check( link && ( link->size() == ( P - 1 ) * ( m + 1 ) ) ,
@@ -712,13 +727,34 @@ int main( int argc , char ** argv )
   check( dsol < 1e-12 , "the chunk produces its own SVMBlockSolution" );
   delete csol;
 
-  delete dec;
+  /* The model of the SVMBlock is that of any of its chunks, the consensus
+   * constraints making them the same one: it is therefore read out of the
+   * father as it is out of a monolithic one. */
+  cns.get_solution_from_abstract();
+  double dfather = std::abs( cns.get_b() - b );
+  auto wf = cns.get_w();
+  for( Index j = 0 ; j < m ; ++j )
+   dfather = std::max( dfather , std::abs( wf[ j ] - w[ j ] ) );
+  check( dfather < 1e-12 , "the model is read out of the father Block" );
 
-  // a chunk of a single class would have an unbounded subproblem
+  // the structure can no longer be changed once the abstract representation
+  // is there, the Constraint tying the chunks that are there
   bool caught = false;
   try {
-   auto bad = make_consensus_Block( & ref , n );
-   delete bad;
+   SimpleConfiguration< int > two( 2 );
+   cns.set_structure( & two );
+   }
+  catch( const std::exception & e ) { caught = true; }
+  check( caught , "the structure cannot be changed after the AR" );
+
+  // a chunk of a single class would have an unbounded subproblem
+  caught = false;
+  try {
+   SVCBlock bad;
+   bad.set_C( 3 );
+   bad.load( n , m , X , y );
+   SimpleConfiguration< int > all( n );
+   bad.set_structure( & all );
    }
   catch( const std::exception & e ) { caught = true; }
   check( caught , "single-class chunks are refused" );
@@ -729,8 +765,8 @@ int main( int argc , char ** argv )
    SVCBlock nl;
    nl.set_kernel( SVMBlock::kGaussian );
    nl.load( n , m , X , y );
-   auto bad = make_consensus_Block( & nl , 2 );
-   delete bad;
+   SimpleConfiguration< int > two( 2 );
+   nl.set_structure( & two );
    }
   catch( const std::exception & e ) { caught = true; }
   check( caught , "a nonlinear kernel is refused" );

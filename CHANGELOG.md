@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- the consensus rewriting is a *structure* of the `SVMBlock`, chosen by the
+  new `set_structure()` out of the number of chunks, rather than a separate
+  Block that a free function assembles: `make_consensus_Block()` is therefore
+  gone, and with it the `AbstractBlock` that used to be the father. Since the
+  `SVMBlock` still holds the whole data set, a Solver reading the physical
+  representation keeps solving the very same training problem whatever the
+  structure, so that `SMOSolver` can now be attached to the rewriting as well
+
 - the Gram matrix of a data set large enough to be worth a thread is computed
   in parallel
 

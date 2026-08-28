@@ -34,17 +34,21 @@ abstract representation can encode either of two problems, selected through a
   problem is convex, makes the value of the `Objective` the very same number
   whichever of the two is encoded.
 
-Writing the training problem as one problem per chunk of samples, each with its
-own copy of the model and an even share of the regularisation term, the copies
-tied together by linear *consensus* constraints, is a way of *solving* it
-rather than a property of it: a data set has no structure of its own, and the
-number of chunks is a choice of whoever solves. It is therefore not something
-the `Block` encodes but something `make_consensus_Block()` assembles out of
-one, giving exactly the structure `LagrangianDualSolver` expects, so that
-relaxing the consensus constraints turns the training problem into one
-independent, and much smaller, SVM per chunk; equivalently, it is its
-Dantzig-Wolfe decomposition over the chunks. Like the primal, it needs the
-linear kernel.
+The training problem can also be written as one problem per chunk of samples,
+each with its own copy of the model and an even share of the regularisation
+term, the copies tied together by linear *consensus* constraints. Which of the
+two the `Block` is, i.e., whether it has sub-`Block` at all, is a *structure*
+it is given, and it is chosen by `set_structure()` out of a
+`SimpleConfiguration< int >`, the number of chunks: with more than one the
+`SVMBlock` has one sub-`SVMBlock` per chunk and the consensus constraints are
+the only ones it has of its own, it having no `Variable` at all. That is
+exactly the structure `LagrangianDualSolver` expects, so that relaxing the
+consensus constraints turns the training problem into one independent, and
+much smaller, SVM per chunk; equivalently, it is its Dantzig-Wolfe
+decomposition over the chunks. Like the primal, it needs the linear kernel.
+Note that the `SVMBlock` still holds the whole data set, so a `Solver` reading
+the physical representation, such as `SMOSolver`, keeps solving the very same
+training problem whatever the structure.
 
 The hyper-parameters and the targets can be changed at any time, also while a
 `Solver` is attached and the abstract representation is constructed: the

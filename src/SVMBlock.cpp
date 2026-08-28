@@ -778,6 +778,17 @@ void SVMBlock::rebuild_abstract( ModParam issueMod )
 
   delete_abstract();
 
+  /* The chunks of the consensus structure hold a copy of their samples and
+   * of the hyper-parameters, hence whatever brings us here makes them stale
+   * as well: they are dealt out anew, keeping the structure that was asked
+   * for. This is done between the destruction of the abstract representation
+   * and its regeneration, the structure coming first. */
+  if( oAR & Consensus ) {
+   const Index P = f_P;
+   f_P = 1;
+   guts_of_set_structure( P );
+   }
+
   /* The same parts of the same formulation are generated anew: which one it
    * was is what the bits of AR say, so that no Configuration has to be kept
    * around for this. */
@@ -937,6 +948,134 @@ SVMBlock::c_doubleVec & SVMBlock::get_K( void ) const
  }  // end( SVMBlock::get_K )
 
 /*--------------------------------------------------------------------------*/
+/*------------------------------ THE STRUCTURE -----------------------------*/
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::set_structure( Configuration * strc )
+{
+ static const std::string _prfx = "SVMBlock::set_structure: ";
+
+ if( ( ! strc ) && f_BlockConfig )
+  strc = f_BlockConfig->f_structure_Configuration;
+
+ if( ! strc )  // nobody is choosing: the structure is left as it is
+  return;
+
+ auto c = dynamic_cast< SimpleConfiguration< int > * >( strc );
+ if( ! c )
+  throw( std::invalid_argument( _prfx + "the structure of a SVMBlock is a "
+                                "SimpleConfiguration< int >, the number of "
+                                "chunks" ) );
+
+ if( c->value() < 1 )
+  throw( std::invalid_argument( _prfx + "the chunks must be at least one" ) );
+
+ guts_of_set_structure( c->value() );
+
+ }  // end( SVMBlock::set_structure )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::guts_of_set_structure( Index P )
+{
+ static const std::string _prfx = "SVMBlock::set_structure: ";
+
+ if( P == f_P )   // the structure being asked for is the one there is
+  return;         // nothing to do
+
+ if( AR & HasVar )
+  throw( std::logic_error( _prfx + "the abstract representation has been "
+                           "generated already, hence the structure can no "
+                           "longer be changed" ) );
+
+ for( auto sub : v_Block )   // the sub-Block are the wrong ones
+  delete sub;
+ v_Block.clear();
+
+ f_P = P;
+ AR &= ~Consensus;
+
+ if( f_P == 1 )   // no structure at all, the training problem is one Block
+  return;
+
+ check_data();
+
+ if( f_kernel != kLinear )
+  throw( std::invalid_argument( _prfx + "only the linear kernel has the "
+                                "explicit feature map the primal of a chunk "
+                                "needs" ) );
+
+ if( f_P > f_n )
+  throw( std::invalid_argument( _prfx + "more chunks than samples" ) );
+
+ /* The samples are dealt out to the chunks round-robin after having been
+  * sorted by target, so that consecutive samples in the order end up in
+  * different chunks: for a classification problem this means that each chunk
+  * gets samples of both classes as long as there are at least P of the least
+  * numerous one, which is what keeps its subproblem bounded. */
+
+ std::vector< Index > order( f_n );
+ std::iota( order.begin() , order.end() , Index( 0 ) );
+
+ auto & y = v_y;
+ std::stable_sort( order.begin() , order.end() ,
+                   [ &y ]( Index i , Index j ) {
+                    return( y[ i ] < y[ j ] );
+                    } );
+
+ std::vector< std::vector< Index > > chunk( f_P );
+ for( Index t = 0 ; t < f_n ; ++t )
+  chunk[ t % f_P ].push_back( order[ t ] );
+
+ // one sub-Block per chunk - - - - - - - - - - - - - - - - - - - - - - - - -
+
+ for( Index p = 0 ; p < f_P ; ++p ) {
+  auto sub = dynamic_cast< SVMBlock * >( new_Block( classname() , this ) );
+  if( ! sub )
+   throw( std::logic_error( _prfx + classname() +
+                            " is not in the Block factory" ) );
+
+  copy_hyperparameters( sub );
+
+  /* The regularisation term is *split* among the chunks, rather than being
+   * left in one designated chunk, so that every subproblem stays strongly
+   * convex, hence bounded, whatever the multipliers. */
+  sub->set_reg_weight( 1 / double( f_P ) );
+
+  doubleVec X( chunk[ p ].size() * f_m ) , yp( chunk[ p ].size() );
+
+  for( Index t = 0 ; t < chunk[ p ].size() ; ++t ) {
+   std::copy_n( get_x( chunk[ p ][ t ] ) , f_m , X.begin() + t * f_m );
+   yp[ t ] = v_y[ chunk[ p ][ t ] ];
+   }
+
+  sub->load( chunk[ p ].size() , f_m , std::move( X ) , std::move( yp ) );
+
+  /* A chunk whose dual signs are all equal has an unbounded Lagrangian
+   * subproblem in its bias, since the latter then only appears linearly and
+   * moving it in the right direction relaxes all the constraints at once.
+   * Regularising the bias makes the subproblem strongly convex in it, hence
+   * bounded, so only the other case has to be refused. */
+  if( ! f_reg_bias ) {
+   auto & sg = sub->get_dual_signs();
+   if( std::all_of( sg.begin() , sg.end() ,
+                    [ &sg ]( double sk ) { return( sk == sg[ 0 ] ); } ) ) {
+    delete sub;
+    throw( std::invalid_argument(
+     _prfx + "chunk " + std::to_string( p ) + " has samples of one class "
+     "only, whose Lagrangian subproblem is unbounded in the bias: either "
+     "use fewer chunks or regularise the bias" ) );
+    }
+   }
+
+  add_nested_Block( sub );
+  }
+
+ AR |= Consensus;
+
+ }  // end( SVMBlock::guts_of_set_structure )
+
+/*--------------------------------------------------------------------------*/
 /*---------------------- THE ABSTRACT REPRESENTATION -----------------------*/
 /*--------------------------------------------------------------------------*/
 
@@ -949,6 +1088,19 @@ void SVMBlock::generate_abstract_variables( Configuration * stvv )
   return;           // nothing to do
 
  check_data();
+
+ if( AR & Consensus ) {
+  /* With the consensus structure the SVMBlock has no Variable of its own,
+   * all of them living in the chunks: what is generated here is the primal
+   * of each of them, the only formulation the rewriting exists for, and
+   * whatever the Configuration says is not used. */
+  SimpleConfiguration< int > primal( kPrimal );
+  for( auto sub : v_Block )
+   sub->generate_abstract_variables( & primal );
+
+  AR |= HasVar;
+  return;
+  }
 
  /* Which problem the abstract representation encodes is a Configuration
   * matter: it is not part of the training problem, hence it is not part of
@@ -1014,6 +1166,50 @@ void SVMBlock::generate_abstract_constraints( Configuration * stcc )
  if( ! ( AR & HasVar ) )
   throw( std::logic_error( _prfx + "generate_abstract_variables not called"
                            ) );
+
+ if( AR & Consensus ) {
+  /* The consensus constraints, which tie the copy of the model of each chunk
+   * to that of the next one and are the only Constraint the SVMBlock has of
+   * its own: they are what a Lagrangian Solver relaxes to be left with one
+   * independent SVM per chunk. The Constraint of the chunks are generated
+   * here as well, so that the whole tree is ready in one call. */
+
+  for( auto sub : v_Block )
+   sub->generate_abstract_constraints();
+
+  v_link.resize( ( f_P - 1 ) * ( f_m + 1 ) );
+  auto lnk = v_link.begin();
+
+  for( Index p = 0 ; p + 1 < f_P ; ++p ) {
+   auto sp = v_Block[ p ];
+   auto sq = v_Block[ p + 1 ];
+
+   auto wp = sp->get_static_variable_v< ColVariable >( "w" );
+   auto wq = sq->get_static_variable_v< ColVariable >( "w" );
+   auto bp = sp->get_static_variable< ColVariable >( "b" );
+   auto bq = sq->get_static_variable< ColVariable >( "b" );
+
+   for( Index j = 0 ; j < f_m ; ++j , ++lnk ) {
+    LinearFunction::v_coeff_pair coeffs( 2 );
+    coeffs[ 0 ] = std::make_pair( & (*wp)[ j ] , double( 1 ) );
+    coeffs[ 1 ] = std::make_pair( & (*wq)[ j ] , double( -1 ) );
+    lnk->set_both( 0 );
+    lnk->set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
+    }
+
+   LinearFunction::v_coeff_pair coeffs( 2 );
+   coeffs[ 0 ] = std::make_pair( bp , double( 1 ) );
+   coeffs[ 1 ] = std::make_pair( bq , double( -1 ) );
+   lnk->set_both( 0 );
+   lnk->set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
+   ++lnk;
+   }
+
+  add_static_constraint( v_link , "link" );
+
+  AR |= HasCns;
+  return;
+  }
 
  const Index N = get_NDual();
 
@@ -1085,6 +1281,23 @@ void SVMBlock::generate_objective( Configuration * objc )
  if( ! ( AR & HasVar ) )
   throw( std::logic_error( _prfx + "generate_abstract_variables not called"
                            ) );
+
+ if( AR & Consensus ) {
+  /* The Objective is all in the chunks, the SVMBlock having no Variable at
+   * all; yet an *empty* one is set, because a Solver flattening the whole
+   * tree needs it to know the sense of the problem, while a Lagrangian one
+   * is fine with it as long as it depends on no Variable. */
+
+  for( auto sub : v_Block )
+   sub->generate_objective();
+
+  f_obj.set_function( new LinearFunction() );
+  f_obj.set_sense( Objective::eMin , eNoMod );
+  set_objective( & f_obj , eNoMod );
+
+  AR |= HasObj;
+  return;
+  }
 
  const Index N = get_NDual();
 
@@ -1207,6 +1420,23 @@ void SVMBlock::get_solution_from_abstract( void )
 
  v_dcoef.clear();
 
+ if( AR & Consensus ) {
+  /* Every chunk holds a copy of the model, and the consensus constraints
+   * make them the same one at any solution satisfying them: the model of the
+   * SVMBlock is therefore read out of the first chunk. The multipliers are
+   * *not* those of the SVMBlock, its dual index space not being the union of
+   * those of the chunks, so the model is the primal one. */
+
+  auto sub = static_cast< SVMBlock * >( v_Block.front() );
+  sub->get_solution_from_abstract();
+
+  f_training_Results->v_w = sub->f_training_Results->v_w;
+  f_training_Results->f_b = sub->f_training_Results->f_b;
+  f_training_Results->v_alpha.assign( get_NDual() , 0 );
+
+  return;
+  }
+
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
   f_training_Results->v_alpha.resize( v_alpha_var.size() );
@@ -1234,6 +1464,19 @@ void SVMBlock::set_solution_in_abstract( void )
 {
  if( ! ( AR & HasVar ) )  // there is nothing to write into
   return;
+
+ if( AR & Consensus ) {
+  // the model goes into every chunk, which is what the consensus constraints
+  // ask of them
+  for( auto blk : v_Block ) {
+   auto sub = static_cast< SVMBlock * >( blk );
+   sub->set_primal_solution( doubleVec( f_training_Results->v_w ) ,
+                             f_training_Results->f_b );
+   sub->set_solution_in_abstract();
+   }
+
+  return;
+  }
 
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                                            //- - - - - - - - - - - - - - - - -
@@ -1435,6 +1678,10 @@ void SVMBlock::guts_of_destructor( void )
 {
  delete_abstract();
 
+ for( auto sub : v_Block )   // the chunks, if the structure is the
+  delete sub;                // consensus one
+ v_Block.clear();
+
  delete f_training_Results;
  f_training_Results = nullptr;
 
@@ -1462,8 +1709,18 @@ void SVMBlock::delete_abstract( void )
  f_eq.clear();
  for( auto & cnst : v_box )
   cnst.clear();
+ for( auto & cnst : v_link )
+  cnst.clear();
 
  f_obj.clear();
+
+ // with the consensus structure the abstract representation is that of the
+ // chunks, plus the constraints tying them: the chunks are *not* destroyed,
+ // being the structure and not the formulation
+ for( auto sub : v_Block )
+  static_cast< SVMBlock * >( sub )->delete_abstract();
+
+ v_link.clear();
 
  v_cons.clear();
  v_xi_box.clear();
@@ -1485,7 +1742,9 @@ void SVMBlock::delete_abstract( void )
  reset_static_variables();
  reset_objective();
 
- AR = 0;
+ // the structure survives the abstract representation: it says which Block
+ // there are, not how the problem they hold is written
+ AR &= Consensus;
 
  }  // end( SVMBlock::delete_abstract )
 
@@ -1516,152 +1775,6 @@ void SVMBlock::print( std::ostream & output , char vlvl ) const
 
  }  // end( SVMBlock::print )
 
-/*--------------------------------------------------------------------------*/
-/*--------------------- FUNCTIONS OF THE SVMBlock GROUP --------------------*/
-/*--------------------------------------------------------------------------*/
-
-Block * SMSpp_di_unipi_it::make_consensus_Block( const SVMBlock * svm ,
-                                                Block::Index P )
-{
- static const std::string _prfx = "make_consensus_Block: ";
-
- if( ! svm )
-  throw( std::invalid_argument( _prfx + "no SVMBlock given" ) );
-
- if( ! P )
-  throw( std::invalid_argument( _prfx + "the chunks must be at least one" ) );
-
- if( svm->get_kernel_type() != SVMBlock::kLinear )
-  throw( std::invalid_argument( _prfx + "only the linear kernel has the "
-                                "explicit feature map the primal needs" ) );
-
- const Block::Index n = svm->get_NSamples();
- const Block::Index m = svm->get_NFeatures();
-
- if( P > n )
-  throw( std::invalid_argument( _prfx + "more chunks than samples" ) );
-
- /* The samples are dealt out to the chunks round-robin after having been
-  * sorted by target, so that consecutive samples in the order end up in
-  * different chunks: for a classification problem this means that each chunk
-  * gets samples of both classes as long as there are at least P of the least
-  * numerous one, which is what keeps its subproblem bounded. */
- std::vector< Block::Index > order( n );
- std::iota( order.begin() , order.end() , Block::Index( 0 ) );
-
- auto & y = svm->get_y();
- std::stable_sort( order.begin() , order.end() ,
-                   [ &y ]( Block::Index i , Block::Index j ) {
-                    return( y[ i ] < y[ j ] );
-                    } );
-
- std::vector< std::vector< Block::Index > > chunk( P );
- for( Block::Index t = 0 ; t < n ; ++t )
-  chunk[ t % P ].push_back( order[ t ] );
-
- // the father, which has no Variable of its own- - - - - - - - - - - - - - -
-
- auto father = new AbstractBlock();
-
- // one sub-Block per chunk - - - - - - - - - - - - - - - - - - - - - - - - -
-
- for( Block::Index p = 0 ; p < P ; ++p ) {
-  auto sub = dynamic_cast< SVMBlock * >(
-                       Block::new_Block( svm->classname() , father ) );
-  if( ! sub ) {
-   delete father;
-   throw( std::logic_error( _prfx + svm->classname() +
-                            " is not in the Block factory" ) );
-   }
-
-  svm->copy_hyperparameters( sub );
-
-  /* The regularisation term is *split* among the chunks, rather than being
-   * left in one designated chunk, so that every subproblem stays strongly
-   * convex, hence bounded, whatever the multipliers. */
-  sub->set_reg_weight( 1 / double( P ) );
-
-  SVMBlock::doubleVec X( chunk[ p ].size() * m ) , yp( chunk[ p ].size() );
-
-  for( Block::Index t = 0 ; t < chunk[ p ].size() ; ++t ) {
-   std::copy_n( svm->get_x( chunk[ p ][ t ] ) , m , X.begin() + t * m );
-   yp[ t ] = y[ chunk[ p ][ t ] ];
-   }
-
-  sub->load( chunk[ p ].size() , m , std::move( X ) , std::move( yp ) );
-
-  /* A chunk whose dual signs are all equal has an unbounded Lagrangian
-   * subproblem in its bias, since the latter then only appears linearly and
-   * moving it in the right direction relaxes all the constraints at once.
-   * Regularising the bias makes the subproblem strongly convex in it, hence
-   * bounded, so only the other case has to be refused. */
-  if( ! svm->get_reg_bias() ) {
-   auto & sg = sub->get_dual_signs();
-   if( std::all_of( sg.begin() , sg.end() ,
-                    [ &sg ]( double sk ) { return( sk == sg[ 0 ] ); } ) ) {
-    delete father;
-    throw( std::invalid_argument(
-     _prfx + "chunk " + std::to_string( p ) + " has samples of one class "
-     "only, whose Lagrangian subproblem is unbounded in the bias: either "
-     "use fewer chunks or regularise the bias" ) );
-    }
-   }
-
-  SimpleConfiguration< int > primal( SVMBlock::kPrimal );
-  sub->generate_abstract_variables( & primal );
-  sub->generate_abstract_constraints();
-  sub->generate_objective();
-
-  father->add_nested_Block( sub );
-  }
-
- // the consensus constraints, the only ones linking the sub-Block - - - - - -
-
- auto link = new std::vector< FRowConstraint >( ( P - 1 ) * ( m + 1 ) );
-
- auto lnk = link->begin();
- for( Block::Index p = 0 ; p + 1 < P ; ++p ) {
-  auto sp = father->get_nested_Block( p );
-  auto sq = father->get_nested_Block( p + 1 );
-
-  auto wp = sp->get_static_variable_v< ColVariable >( "w" );
-  auto wq = sq->get_static_variable_v< ColVariable >( "w" );
-  auto bp = sp->get_static_variable< ColVariable >( "b" );
-  auto bq = sq->get_static_variable< ColVariable >( "b" );
-
-  for( Block::Index j = 0 ; j < m ; ++j , ++lnk ) {
-   LinearFunction::v_coeff_pair coeffs( 2 );
-   coeffs[ 0 ] = std::make_pair( & (*wp)[ j ] , double( 1 ) );
-   coeffs[ 1 ] = std::make_pair( & (*wq)[ j ] , double( -1 ) );
-   lnk->set_both( 0 );
-   lnk->set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
-   }
-
-  LinearFunction::v_coeff_pair coeffs( 2 );
-  coeffs[ 0 ] = std::make_pair( bp , double( 1 ) );
-  coeffs[ 1 ] = std::make_pair( bq , double( -1 ) );
-  lnk->set_both( 0 );
-  lnk->set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
-  ++lnk;
-  }
-
- if( P > 1 )
-  father->add_static_constraint( *link , "link" );
- else
-  delete link;
-
- /* The Objective is all in the sub-Block, the father having no Variable at
-  * all; yet an *empty* one is set, because a Solver flattening the whole tree
-  * needs it to know the sense of the problem, while a Lagrangian one is fine
-  * with it as long as it depends on no Variable. */
- auto obj = new FRealObjective();
- obj->set_function( new LinearFunction() );
- obj->set_sense( Objective::eMin , eNoMod );
- father->set_objective( obj );
-
- return( father );
-
- }  // end( make_consensus_Block )
 
 /*--------------------------------------------------------------------------*/
 /*------------------- METHODS OF THE CLASS SVMBlockSolution ----------------*/
