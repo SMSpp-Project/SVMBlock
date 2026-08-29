@@ -955,25 +955,22 @@ void SVMBlock::rmv_abstract_samples( Subset & dk , ModParam issueAMod )
   return;
 
  /* The Objective and the Constraint go first, so that nothing is left
-  * pointing at a Variable that is about to be destroyed; the dual indices in
-  * dk are ordered, hence they are removed from the back, each removal only
-  * shifting the ones that follow it. */
-
- auto rmv_from = [ &dk ]( auto * fun , ModParam par ) {
-  for( auto k = dk.rbegin() ; k != dk.rend() ; ++k )
-   fun->remove_variable( *k , par );
-  };
+  * pointing at a Variable that is about to be destroyed. */
 
  if( ! ( AR & PrimalF ) ) {   // the dual formulation - - - - - - - - - - - -
                               //- - - - - - - - - - - - - - - - - - - - - - -
   if( AR & HasObj )
-   rmv_from( static_cast< QuadFunction * >( f_obj.get_function() ) ,
-             un_ModBlock( issueAMod ) );
+   static_cast< QuadFunction * >( f_obj.get_function()
+                                  )->remove_variables( Subset( dk ) , true ,
+                                                     un_ModBlock( issueAMod )
+                                                       );
 
   if( AR & HasCns ) {
    if( ! f_reg_bias )
-    rmv_from( static_cast< LinearFunction * >( f_eq.get_function() ) ,
-              un_ModBlock( issueAMod ) );
+    static_cast< LinearFunction * >( f_eq.get_function()
+                                     )->remove_variables( Subset( dk ) , true ,
+                                                     un_ModBlock( issueAMod )
+                                                          );
 
    remove_dynamic_constraints( v_box , Subset( dk ) , true , issueAMod );
    }
@@ -987,15 +984,16 @@ void SVMBlock::rmv_abstract_samples( Subset & dk , ModParam issueAMod )
  //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
  if( AR & HasObj ) {
-  /* The slacks are the last f_m + 1 + N variables of the Objective, the
-   * weights and the bias coming first and staying. */
+  /* The slacks come after the weights and the bias in the Objective, which
+   * stay: the indices of the ones that go are shifted accordingly. */
   Subset ok( dk.size() );
   for( Index t = 0 ; t < dk.size() ; ++t )
    ok[ t ] = f_m + 1 + dk[ t ];
 
-  auto dqf = static_cast< DQuadFunction * >( f_obj.get_function() );
-  for( auto k = ok.rbegin() ; k != ok.rend() ; ++k )
-   dqf->remove_variable( *k , un_ModBlock( issueAMod ) );
+  static_cast< DQuadFunction * >( f_obj.get_function()
+                                  )->remove_variables( std::move( ok ) , true ,
+                                                     un_ModBlock( issueAMod )
+                                                       );
   }
 
  if( AR & HasCns ) {
