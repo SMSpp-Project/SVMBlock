@@ -59,7 +59,12 @@ only the entries of the new samples being computed. Whatever is indexed over
 the dual index space is therefore *dynamic*, i.e., the multipliers and their
 bounds in the dual, the slacks with their bounds and the margin constraints in
 the primal; the weights and the bias are indexed over the features, which do
-not change, and are static.
+not change, and are static. The abstract representation is *extended* and
+*shrunk* rather than rebuilt, so that a `Solver` reading it also has only to
+deal with what has actually changed: the multipliers a sample adds come at the
+end of the dual index space, which is where a dynamic `Variable` is added, and
+that is why the two multipliers of a regression sample are adjacent rather
+than the two sides of the tube being one block each.
 
 The hyper-parameters and the targets can be changed at any time, also while a
 `Solver` is attached and the abstract representation is constructed: the

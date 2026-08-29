@@ -680,9 +680,12 @@ void SVMBlock::add_samples( Index k , c_doubleVec & X , c_doubleVec & y ,
 
  remap_model( o_di , o_ds , o_smpl );
 
- // the size of the problem has changed, hence the abstract representation
- // is rebuilt and the NBModification says that everything has to be re-read
- update_abstract( eARAll , issueMod , issueAMod );
+ /* The abstract representation is *extended*, not rebuilt: the new dual
+  * indices come at the end [see the dual index space of the concrete
+  * classes], hence they are added exactly where a dynamic Variable goes, and
+  * nothing that was already there changes. */
+ if( not_dry_run( issueAMod ) )
+  add_abstract_samples( get_NDual() - o_di.size() , issueAMod );
 
  if( issue_pmod( issueMod ) )
   Block::add_Modification( std::make_shared< SVMBlockRngdMod >(
@@ -771,11 +774,19 @@ void SVMBlock::remove_samples( Subset && nms , bool ordered ,
   v_K = std::move( nK );
   }
 
+ /* Which dual indices go with the samples that go: they are found in the
+  * dual index space as it was, i.e., before the map is rebuilt. */
+ Subset dk;
+ for( Index k = 0 ; k < o_di.size() ; ++k )
+  if( std::binary_search( nms.begin() , nms.end() , o_di[ k ] ) )
+   dk.push_back( k );
+
  set_dual_data();
 
  remap_model( o_di , o_ds , o_smpl );
 
- update_abstract( eARAll , issueMod , issueAMod );
+ if( not_dry_run( issueAMod ) )
+  rmv_abstract_samples( dk , issueAMod );
 
  if( issue_pmod( issueMod ) )
   Block::add_Modification( std::make_shared< SVMBlockSbstMod >(
@@ -784,6 +795,218 @@ void SVMBlock::remove_samples( Subset && nms , bool ordered ,
                            Observer::par2chnl( issueMod ) );
 
  }  // end( SVMBlock::remove_samples( Subset ) )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::add_abstract_samples( Index kk , ModParam issueAMod )
+{
+ if( ( ! ( AR & HasVar ) ) || ( ! kk ) )
+  return;
+
+ const Index N = get_NDual();
+ const Index o_N = N - kk;   // the dual indices that were already there
+
+ if( ! ( AR & PrimalF ) ) {   // the dual formulation - - - - - - - - - - - -
+                              //- - - - - - - - - - - - - - - - - - - - - - -
+  std::list< ColVariable > na( kk );
+  for( auto & ak : na )
+   ak.set_type( ColVariable::kContinuous );
+
+  // the pointers are taken now, the splice below not moving the elements
+  std::vector< ColVariable * > pa( kk );
+  { auto it = pa.begin();
+    for( auto & ak : na )
+     *(it++) = &ak;
+    }
+
+  add_dynamic_variables( v_alpha_var , na , issueAMod );
+
+  if( AR & HasCns ) {
+   const double ub = get_ub();
+
+   std::list< LB0Constraint > nb( kk );
+   { Index k = 0;
+     for( auto & bk : nb ) {
+      bk.set_variable( pa[ k++ ] );
+      bk.set_rhs( ub );
+      }
+     }
+
+   add_dynamic_constraints( v_box , nb , issueAMod );
+
+   if( ! f_reg_bias ) {   // the new multipliers enter s^T alpha = 0
+    v_coeff_pair coeffs( kk );
+    for( Index k = 0 ; k < kk ; ++k )
+     coeffs[ k ] = std::make_pair( pa[ k ] , v_ds[ o_N + k ] );
+
+    static_cast< LinearFunction * >( f_eq.get_function()
+                                     )->add_variables( std::move( coeffs ) ,
+                                                       un_ModBlock( issueAMod )
+                                                       );
+    }
+   }
+
+  if( AR & HasObj ) {
+   /* The new multipliers come with their own diagonal term and with their
+    * row of the Hessian, i.e., the cross terms against every dual index,
+    * the ones already there and the other new ones alike. The entries of
+    * the Gram matrix they need are those the addition has just computed. */
+
+   auto & K = get_K();
+   const double rb = f_reg_bias ? 1 : 0;
+   const double d = f_squared_loss ? 1 / ( 2 * f_C ) : 0;
+
+   v_coeff_triple triples( kk );
+   for( Index k = 0 ; k < kk ; ++k ) {
+    const double sk = v_ds[ o_N + k ];
+    const Index ik = v_di[ o_N + k ];
+    triples[ k ] = std::make_tuple(
+     pa[ k ] , - v_dq[ o_N + k ] ,
+     - ( sk * sk * ( K[ std::size_t( ik ) * f_n + ik ] + rb ) + d ) / 2 );
+    }
+
+   v_off_diag_term off_diag;
+   off_diag.reserve( std::size_t( kk ) * ( o_N + kk ) );
+   for( Index k = o_N ; k < N ; ++k ) {
+    const double sk = v_ds[ k ];
+    const std::size_t ik = std::size_t( v_di[ k ] ) * f_n;
+    for( Index l = 0 ; l < k ; ++l ) {
+     const double Qkl = sk * v_ds[ l ] * ( K[ ik + v_di[ l ] ] + rb );
+     if( Qkl )
+      off_diag.emplace_back( k , l , - Qkl );
+     }
+    }
+
+   static_cast< QuadFunction * >( f_obj.get_function()
+                                  )->add_variables( std::move( triples ) ,
+                                                    std::move( off_diag ) ,
+                                                    un_ModBlock( issueAMod ) );
+   }
+
+  return;
+  }
+
+ // the primal formulation- - - - - - - - - - - - - - - - - - - - - - - - - -
+ //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+ std::list< ColVariable > nx( kk );
+ for( auto & xk : nx )
+  xk.set_type( ColVariable::kContinuous );
+
+ std::vector< ColVariable * > px( kk );
+ { auto it = px.begin();
+   for( auto & xk : nx )
+    *(it++) = &xk;
+   }
+
+ add_dynamic_variables( v_xi , nx , issueAMod );
+
+ if( AR & HasCns ) {
+  std::list< LB0Constraint > nb( kk );
+  { Index k = 0;
+    for( auto & bk : nb )
+     bk.set_variable( px[ k++ ] );
+    }
+
+  add_dynamic_constraints( v_xi_box , nb , issueAMod );
+
+  std::list< FRowConstraint > nc( kk );
+  { Index k = 0;
+    for( auto & ck : nc ) {
+     const double sk = v_ds[ o_N + k ];
+     const double * xi = get_x( v_di[ o_N + k ] );
+
+     v_coeff_pair coeffs( f_m + 2 );
+     for( Index j = 0 ; j < f_m ; ++j )
+      coeffs[ j ] = std::make_pair( & v_w[ j ] , sk * xi[ j ] );
+
+     coeffs[ f_m ] = std::make_pair( & f_b_var , sk );
+     coeffs[ f_m + 1 ] = std::make_pair( px[ k ] , double( 1 ) );
+
+     ck.set_lhs( - v_dq[ o_N + k ] );
+     ck.set_rhs( Inf< RowConstraint::RHSValue >() );
+     ck.set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
+     ++k;
+     }
+    }
+
+  add_dynamic_constraints( v_cons , nc , issueAMod );
+  }
+
+ if( AR & HasObj ) {
+  v_coeff_triple triples( kk );
+  for( Index k = 0 ; k < kk ; ++k )
+   triples[ k ] = std::make_tuple( px[ k ] ,
+                                   f_squared_loss ? double( 0 ) : f_C ,
+                                   f_squared_loss ? f_C : double( 0 ) );
+
+  static_cast< DQuadFunction * >( f_obj.get_function()
+                                  )->add_variables( std::move( triples ) ,
+                                                    un_ModBlock( issueAMod ) );
+  }
+
+ }  // end( SVMBlock::add_abstract_samples )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::rmv_abstract_samples( Subset & dk , ModParam issueAMod )
+{
+ if( ( ! ( AR & HasVar ) ) || dk.empty() )
+  return;
+
+ /* The Objective and the Constraint go first, so that nothing is left
+  * pointing at a Variable that is about to be destroyed; the dual indices in
+  * dk are ordered, hence they are removed from the back, each removal only
+  * shifting the ones that follow it. */
+
+ auto rmv_from = [ &dk ]( auto * fun , ModParam par ) {
+  for( auto k = dk.rbegin() ; k != dk.rend() ; ++k )
+   fun->remove_variable( *k , par );
+  };
+
+ if( ! ( AR & PrimalF ) ) {   // the dual formulation - - - - - - - - - - - -
+                              //- - - - - - - - - - - - - - - - - - - - - - -
+  if( AR & HasObj )
+   rmv_from( static_cast< QuadFunction * >( f_obj.get_function() ) ,
+             un_ModBlock( issueAMod ) );
+
+  if( AR & HasCns ) {
+   if( ! f_reg_bias )
+    rmv_from( static_cast< LinearFunction * >( f_eq.get_function() ) ,
+              un_ModBlock( issueAMod ) );
+
+   remove_dynamic_constraints( v_box , Subset( dk ) , true , issueAMod );
+   }
+
+  remove_dynamic_variables( v_alpha_var , Subset( dk ) , true , issueAMod ,
+                            issueAMod );
+  return;
+  }
+
+ // the primal formulation- - - - - - - - - - - - - - - - - - - - - - - - - -
+ //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+ if( AR & HasObj ) {
+  /* The slacks are the last f_m + 1 + N variables of the Objective, the
+   * weights and the bias coming first and staying. */
+  Subset ok( dk.size() );
+  for( Index t = 0 ; t < dk.size() ; ++t )
+   ok[ t ] = f_m + 1 + dk[ t ];
+
+  auto dqf = static_cast< DQuadFunction * >( f_obj.get_function() );
+  for( auto k = ok.rbegin() ; k != ok.rend() ; ++k )
+   dqf->remove_variable( *k , un_ModBlock( issueAMod ) );
+  }
+
+ if( AR & HasCns ) {
+  remove_dynamic_constraints( v_cons , Subset( dk ) , true , issueAMod );
+  remove_dynamic_constraints( v_xi_box , Subset( dk ) , true , issueAMod );
+  }
+
+ remove_dynamic_variables( v_xi , Subset( dk ) , true , issueAMod ,
+                           issueAMod );
+
+ }  // end( SVMBlock::rmv_abstract_samples )
 
 /*--------------------------------------------------------------------------*/
 

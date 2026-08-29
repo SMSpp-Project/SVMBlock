@@ -62,11 +62,14 @@ namespace SMSpp_di_unipi_it
  * (\f$ p = 2 \f$) of the samples, and the prediction at \f$ x \f$ is the
  * decision function itself.
  *
- * Each sample gives *two* dual indices, one for each side of the tube: in the
- * notation of the base class, \f$ N = 2n \f$, \f$ i(k) = k \bmod n \f$,
- * \f$ s_k = +1 \f$ for \f$ k < n \f$ and \f$ -1 \f$ otherwise, and
- * \f$ q_k = - s_k y_{ i(k) } + \epsilon \f$, whence the dual has the
- * customary two-by-two block Hessian
+ * Each sample gives *two* dual indices, one for each side of the tube, and the
+ * two are adjacent so that a sample added to the data set adds them at the end
+ * of the dual index space: in the notation of the base class,
+ * \f$ N = 2n \f$, \f$ i(k) = \lfloor k / 2 \rfloor \f$, \f$ s_k = +1 \f$
+ * for \f$ k \f$ even and \f$ -1 \f$ for \f$ k \f$ odd, and
+ * \f$ q_k = - s_k y_{ i(k) } + \epsilon \f$, whence the dual has, up to the
+ * permutation that groups the two sides, the customary two-by-two block
+ * Hessian
  * \f[
  *   Q = \left[ \begin{array}{rr}
  *          \mathcal{K} & - \mathcal{K} \\

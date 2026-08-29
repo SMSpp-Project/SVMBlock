@@ -111,14 +111,20 @@ void SVRBlock::set_dual_data( void )
  v_di.resize( N );
  v_dq.resize( N );
 
- for( Index i = 0 ; i < f_n ; ++i ) {
-  v_ds[ i ] = 1;                        // the upper side of the tube
-  v_di[ i ] = i;
-  v_dq[ i ] = - v_y[ i ] + f_epsilon;
+ /* The two multipliers of a sample are *adjacent*, rather than the two sides
+  * of the tube being one block each: a sample added to the data set then adds
+  * its two dual indices at the end of the dual index space, which is where a
+  * dynamic Variable is added [see Block::add_dynamic_variables()], and one
+  * removed takes away two adjacent ones. */
 
-  v_ds[ f_n + i ] = -1;                 // the lower side of the tube
-  v_di[ f_n + i ] = i;
-  v_dq[ f_n + i ] = v_y[ i ] + f_epsilon;
+ for( Index i = 0 ; i < f_n ; ++i ) {
+  v_ds[ 2 * i ] = 1;                    // the upper side of the tube
+  v_di[ 2 * i ] = i;
+  v_dq[ 2 * i ] = - v_y[ i ] + f_epsilon;
+
+  v_ds[ 2 * i + 1 ] = -1;               // the lower side of the tube
+  v_di[ 2 * i + 1 ] = i;
+  v_dq[ 2 * i + 1 ] = v_y[ i ] + f_epsilon;
   }
 
  }  // end( SVRBlock::set_dual_data )

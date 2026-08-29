@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replacing it, with the `eAddSamples` and `eRmvSamples` Modification: the
   samples that stay are not touched, their multipliers keep their value and
   the Gram matrix is extended or compacted rather than recomputed. Whatever is
-  indexed over the dual index space is dynamic accordingly. `SMOSolver`
+  indexed over the dual index space is dynamic accordingly, and the abstract
+  representation is extended and shrunk rather than rebuilt. `SMOSolver`
   re-optimizes across them, which is what an incremental training, and a
   k-fold cross-validation done by taking a fold out and putting it back, need
 
@@ -48,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Configuration asks for it and what makes the model writable to a file
 
 ### Changed
+
+- the two dual indices of a sample of a `SVRBlock` are *adjacent*, rather than
+  the two sides of the tube being one block each: a sample then adds its
+  multipliers at the end of the dual index space, which is where a dynamic
+  `Variable` is added. Note that this changes the order in which the
+  multipliers are stored, hence that of a `SVMBlockSolution` written to a file
 
 - the consensus rewriting is a *structure* of the `SVMBlock`, chosen by the
   new `set_structure()` out of the number of chunks, rather than a separate

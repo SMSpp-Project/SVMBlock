@@ -1009,6 +1009,54 @@ int main( int argc , char ** argv )
                  []( SVMBlock * svm ) {
                   svm->chg_target( svm->get_y()[ 2 ] + 1 , 2 );
                   } , frm + "a target of a regression" );
+
+   /* Samples added and removed: the dual index space changes size, hence the
+    * abstract representation gains and loses Variable and Constraint rather
+    * than being rebuilt, and it still has to be the one it would have been
+    * had it been generated once the change was done. */
+
+   check_change( "SVCBlock" , form , Xc , yc , n , m ,
+                 [ m ]( SVMBlock * svm ) {
+                  doubleVec nX , ny;
+                  make_svc_data( 4 , m , nX , ny , 61 );
+                  svm->add_samples( 4 , nX , ny );
+                  } , frm + "samples added" );
+
+   check_change( "SVCBlock" , form , Xc , yc , n , m ,
+                 []( SVMBlock * svm ) {
+                  svm->remove_samples( Block::Range( 5 , 9 ) );
+                  } , frm + "a range of samples removed" );
+
+   check_change( "SVCBlock" , form , Xc , yc , n , m ,
+                 []( SVMBlock * svm ) {
+                  svm->remove_samples( Block::Subset( { 0 , 6 , 17 } ) ,
+                                       true );
+                  } , frm + "a subset of samples removed" );
+
+   check_change( "SVCBlock" , form , Xc , yc , n , m ,
+                 [ m ]( SVMBlock * svm ) {
+                  doubleVec nX , ny;
+                  make_svc_data( 6 , m , nX , ny , 67 );
+                  svm->add_samples( 6 , nX , ny );
+                  svm->remove_samples( Block::Subset( { 1 , 2 , 30 } ) ,
+                                       true );
+                  } , frm + "samples added and removed" );
+
+   /* A regression sample is two dual indices, adjacent so that an addition
+    * lands at the end of the dual index space and a removal takes away a
+    * pair: these two are what tells that the layout is followed. */
+
+   check_change( "SVRBlock" , form , Xr , yr , n , m ,
+                 [ m ]( SVMBlock * svm ) {
+                  doubleVec nX , ny;
+                  make_svr_data( 3 , m , nX , ny , 71 );
+                  svm->add_samples( 3 , nX , ny );
+                  } , frm + "samples added to a regression" );
+
+   check_change( "SVRBlock" , form , Xr , yr , n , m ,
+                 []( SVMBlock * svm ) {
+                  svm->remove_samples( Block::Subset( { 4 , 11 } ) , true );
+                  } , frm + "samples removed from a regression" );
    }
 
   // the kernel has no primal, hence it is only changed under the dual

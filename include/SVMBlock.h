@@ -138,8 +138,9 @@ namespace SMSpp_di_unipi_it
  *   \f$ q_k = -1 \f$, giving the hinge (\f$ p = 1 \f$) or squared hinge
  *   (\f$ p = 2 \f$) loss;
  *
- * - SVRBlock has \f$ N = 2n \f$, \f$ i(k) = k \bmod n \f$, \f$ s_k = +1 \f$
- *   for \f$ k < n \f$ and \f$ -1 \f$ otherwise, and
+ * - SVRBlock has \f$ N = 2n \f$, the two multipliers of a sample being
+ *   adjacent: \f$ i(k) = \lfloor k / 2 \rfloor \f$, \f$ s_k = +1 \f$ for
+ *   \f$ k \f$ even and \f$ -1 \f$ for \f$ k \f$ odd, and
  *   \f$ q_k = - s_k y_{ i(k) } + \epsilon \f$, giving the
  *   \f$ \epsilon \f$-insensitive (\f$ p = 1 \f$) or squared
  *   \f$ \epsilon \f$-insensitive (\f$ p = 2 \f$) loss.
@@ -1047,6 +1048,27 @@ class SVMBlock : public Block
  /// builds, or destroys, the \p P chunks the consensus structure is made of
 
  void guts_of_set_structure( Index P );
+
+/*--------------------------------------------------------------------------*/
+ /// extends the abstract representation with \p kk new dual indices
+ /** Extends the abstract representation, whichever formulation it encodes,
+  * with the \p kk dual indices that have just been added at the end of the
+  * dual index space: the multipliers with their bounds, their term in the
+  * equality constraint and their row and column of the Hessian for the dual,
+  * the slacks with their bounds, their margin constraints and their term in
+  * the Objective for the primal. Nothing that was already there changes, the
+  * data of the samples that were already there being untouched. */
+
+ void add_abstract_samples( Index kk , ModParam issueAMod );
+
+/*--------------------------------------------------------------------------*/
+ /// removes the given dual indices from the abstract representation
+ /** Removes from the abstract representation, whichever formulation it
+  * encodes, everything that belongs to the dual indices in \p dk, which are
+  * ordered by increasing index and are those of the samples that have just
+  * been removed, in the dual index space as it was before. */
+
+ void rmv_abstract_samples( Subset & dk , ModParam issueAMod );
 
 /*--------------------------------------------------------------------------*/
  /// realigns the model to a dual index space that has changed size
