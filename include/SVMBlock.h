@@ -376,8 +376,10 @@ class SVMBlock : public Block
   * which are then the only Constraint the SVMBlock has of its own, it having
   * no Variable at all: precisely the structure a generic Lagrangian Solver
   * expects, so that relaxing them makes each chunk an independent, and much
-  * smaller, SVM training problem with a linear term added to its objective;
-  * equivalently, it is the Dantzig-Wolfe decomposition over the chunks.
+  * smaller, SVM training problem with a linear term added to its objective
+  * [see set_linear_term()], which is what lets the ad hoc SMOSolver be used
+  * on it; equivalently, it is the Dantzig-Wolfe decomposition over the
+  * chunks.
   *
   * Two remarks on why it is assembled this way. First, the regularisation
   * term is *split*, rather than being left in one designated chunk: this
@@ -583,6 +585,27 @@ class SVMBlock : public Block
                       ModParam issueAMod = eNoBlck );
 
 /*--------------------------------------------------------------------------*/
+ /// sets the linear term of the primal
+ /** Sets the linear term \f$ \lambda^T w + \mu b \f$ of the primal, which
+  * defaults to zero, \p lambda being either empty, i.e., zero, or a vector
+  * with one entry per feature.
+  *
+  * The term is what the Lagrangian relaxation of the constraints linking a
+  * chunk of the consensus structure to the others leaves in the subproblem of
+  * that chunk [see set_structure()], \f$ ( \lambda , \mu ) \f$ being the
+  * multipliers of those constraints: it is therefore no part of the training
+  * problem, whence it is not serialized. In the dual it shifts the linear
+  * coefficients [see get_dual_shifts()], it moves the right-hand side of the
+  * equality constraint to \f$ \mu \f$ if the bias is not regularised, and
+  * it adds a constant [see get_dual_constant()]; the model it yields is
+  * \f$ w = ( \sum_k \alpha_k s_k x_k - \lambda ) / \rho \f$, whence the
+  * explicit feature map it takes, which only the linear kernel has. */
+
+ void set_linear_term( c_doubleVec & lambda , double mu ,
+                       ModParam issueMod = eNoBlck ,
+                       ModParam issueAMod = eNoBlck );
+
+/*--------------------------------------------------------------------------*/
  /// changes the target of one sample
  /** Changes the target of sample \p i to \p ny, which must be an admissible
   * value for the concrete class; if it is not, nothing is changed and
@@ -688,6 +711,19 @@ class SVMBlock : public Block
 
  virtual void copy_hyperparameters( SVMBlock * to ) const;
 
+/*--------------------------------------------------------------------------*/
+ /// maps an abstract change back into the physical representation
+ /** Intercepts the Modification reporting a change of the abstract
+  * representation made from the outside, and maps back into the physical
+  * representation the only one of them that the latter can express, i.e., a
+  * change of the linear term of the primal [see set_linear_term()]: this is
+  * what a Lagrangian Solver writes into the Objective of a chunk of the
+  * consensus structure while relaxing the constraints linking it to the
+  * others, and the Solver reading the physical representation [see SMOSolver]
+  * has to see it. Everything else is left alone. */
+
+ void add_Modification( sp_Mod mod , ChnlName chnl = 0 ) override;
+
 /** @} ---------------------------------------------------------------------*/
 /*------------- METHODS FOR READING THE DATA OF THE SVMBlock ---------------*/
 /*--------------------------------------------------------------------------*/
@@ -771,6 +807,42 @@ class SVMBlock : public Block
  /// returns the weight of the regularisation term
 
  double get_reg_weight( void ) const { return( f_reg_weight ); }
+
+ /// returns lambda of the linear term of the primal, empty if it is zero
+
+ c_doubleVec & get_linear_term( void ) const { return( v_lambda ); }
+
+ /// returns the coefficient mu of the bias in the linear term of the primal
+
+ double get_linear_bias( void ) const { return( f_mu ); }
+
+ /// returns true if the linear term of the primal is not zero
+
+ bool has_linear_term( void ) const
+  { return( ( ! v_lambda.empty() ) || ( f_mu != 0 ) ); }
+
+ /// returns the shifts the linear term applies to the linear term of the dual
+ /** Fills \p shift with the get_NDual() values
+  * \f[
+  *   \sigma_k = s_k ( \langle \lambda , x_{ i( k ) } \rangle
+  *                    [ \; + \mu \; ] ) / \rho
+  * \f]
+  * that the linear term of the primal subtracts from the linear coefficients
+  * \f$ q_k \f$ of the dual, \f$ \rho \f$ being the weight of the
+  * regularisation term and the term in \f$ \mu \f$ being there only if the
+  * bias is regularised, for otherwise \f$ \mu \f$ rather is the right-hand
+  * side of the equality constraint. All the shifts are zero, and \p shift is
+  * only resized, if there is no linear term. */
+
+ void get_dual_shifts( doubleVec & shift ) const;
+
+ /// returns the constant term the linear term of the primal adds to the dual
+ /** The constant \f$ - ( \| \lambda \|^2 [ \; + \mu^2 \; ] ) /
+  * ( 2 \rho ) \f$ that the linear term of the primal adds to the (maximised)
+  * dual, the term in \f$ \mu \f$ being there only if the bias is
+  * regularised; zero if there is no linear term. */
+
+ double get_dual_constant( void ) const;
 
  /// returns the half-width of the insensitivity tube, 0 if there is none
 
@@ -1045,6 +1117,11 @@ class SVMBlock : public Block
  void guts_of_load( void );
 
 /*--------------------------------------------------------------------------*/
+ /// maps one abstract Modification back into the physical representation
+
+ void guts_of_add_Modification( const Modification * mod );
+
+/*--------------------------------------------------------------------------*/
  /// builds, or destroys, the \p P chunks the consensus structure is made of
 
  void guts_of_set_structure( Index P );
@@ -1116,6 +1193,9 @@ class SVMBlock : public Block
  bool f_squared_loss = false;   ///< true if the slacks are squared
  bool f_reg_bias = false;       ///< true if the bias is regularised
  double f_reg_weight = 1;       ///< the weight of the regularisation term
+
+ doubleVec v_lambda;            ///< lambda of the linear term, empty = zero
+ double f_mu = 0;               ///< mu of the linear term of the primal
 
  doubleVec v_ds;             ///< the N signs s_k
  IndexVec v_di;              ///< the N sample indices i( k )
@@ -1209,6 +1289,7 @@ class SVMBlockMod : public Modification
   eChgSquaredLoss ,  ///< change whether the slacks are squared
   eChgRegBias ,      ///< change whether the bias is regularised
   eChgRegWeight ,    ///< change the weight of the regularisation term
+  eChgLinTerm ,      ///< change the linear term of the primal
   eChgEpsilon ,      ///< change the half-width of the insensitivity tube
   eChgTargets ,      ///< change the targets of some samples
   eAddSamples ,      ///< add samples at the end of the data set
@@ -1254,6 +1335,7 @@ class SVMBlockMod : public Modification
    case( eChgSquaredLoss ): output << "change the loss"; break;
    case( eChgRegBias ):     output << "change the regularisation of the bias";
                             break;
+   case( eChgLinTerm ):     output << "change the linear term"; break;
    case( eChgRegWeight ):   output << "change the regularisation weight";
                             break;
    case( eChgEpsilon ):     output << "change epsilon"; break;

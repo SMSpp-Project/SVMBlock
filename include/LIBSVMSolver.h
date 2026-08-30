@@ -78,6 +78,10 @@ namespace SMSpp_di_unipi_it
  *   longer be the value LIBSVM reports, and the whole point of this Solver is
  *   to be comparable with the others;
  *
+ * - there is no linear term in the primal, LIBSVM having none, whence the
+ *   subproblem of a chunk of the consensus structure is out of its reach [see
+ *   SVMBlock::set_linear_term()];
+ *
  * - the kernel is one of the four LIBSVM has, i.e., anything but the
  *   Laplacian one [see SVMBlock::set_kernel()].
  *

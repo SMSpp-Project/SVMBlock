@@ -138,7 +138,23 @@ namespace SMSpp_di_unipi_it
  * This is what makes a model selection, where the very same data set is
  * trained over and over with different hyper-parameters, cost much less than
  * the sum of the individual trainings, and it costs nothing when nothing has
- * changed, in which case compute() returns immediately. */
+ * changed, in which case compute() returns immediately.
+ *
+ * <b>The Lagrangian subproblem of a chunk.</b> The linear term of the primal
+ * [see SVMBlock::set_linear_term()], i.e., what the Lagrangian relaxation of
+ * the constraints linking a chunk of the consensus structure to the others
+ * leaves in the subproblem of that chunk, is dealt with exactly as anything
+ * else that only changes the linear term of the dual: it shifts \f$ q \f$
+ * and the right-hand side of the equality constraint, and it adds a constant
+ * to the value. Because the shifts are affine in the multipliers as well, a
+ * change of the multipliers of the linking constraints, i.e., what a
+ * Lagrangian Solver does at each of its iterations, is followed in
+ * \f$ O( N ) \f$ time from the previous solution: this is what makes the
+ * Solver usable inside a Lagrangian scheme, where the very same chunk is
+ * solved over and over with different multipliers. The multipliers are then
+ * moved back onto the equality constraint, whose right-hand side has changed,
+ * one coordinate at a time; if the bounds leave no room for this the dual is
+ * empty, i.e., the subproblem is unbounded, and kUnbounded is reported. */
 
 class SMOSolver : public Solver
 {
@@ -350,6 +366,17 @@ class SMOSolver : public Solver
  bool resync( void );
 
 /*--------------------------------------------------------------------------*/
+ /// makes the multipliers satisfy the equality constraint again
+ /** Moves the multipliers so that s^T alpha is the right-hand side of the
+  * equality constraint, updating the gradient accordingly, and returns true
+  * if it succeeds: it does not if the bounds leave no room for it, which
+  * means that the dual is empty, hence that the training problem is
+  * unbounded. It is only called if the bias is not regularised, for otherwise
+  * there is no equality constraint. */
+
+ bool restore_equality( void );
+
+/*--------------------------------------------------------------------------*/
  /// the SMO iteration proper, for the dual with the equality constraint
 
  int solve_with_equality( void );
@@ -365,7 +392,8 @@ class SMOSolver : public Solver
  double Q( Index k , Index l ) const
  {
   double q = f_ds[ k ] * f_ds[ l ] *
-             ( f_K[ std::size_t( f_di[ k ] ) * f_n + f_di[ l ] ] + f_rb );
+             ( f_K[ std::size_t( f_di[ k ] ) * f_n + f_di[ l ] ] + f_rb )
+             / f_rw;
   if( k == l )
    q += f_d;
   return( q );
@@ -393,6 +421,14 @@ class SMOSolver : public Solver
  double f_u = 0;               ///< the upper bound on the multipliers
  double f_rb = 0;              ///< 1 if the bias is regularised, 0 otherwise
  double f_d = 0;               ///< the diagonal term due to the squared loss
+
+ /* The weight of the regularisation term, which divides the Hessian of the
+  * dual: it is 1 unless the SVMBlock is a chunk of a consensus structure,
+  * where the term is split among the chunks. */
+
+ double f_rw = 1;              ///< the weight of the regularisation term
+ double f_mu = 0;              ///< the right-hand side of the equality
+ double f_dc = 0;              ///< the constant term of the dual
  const double * f_K = nullptr;      ///< the n x n Gram matrix
  const Index * f_di = nullptr;      ///< the N sample indices
 

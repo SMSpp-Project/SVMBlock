@@ -43,6 +43,8 @@
 
 #include "LinearFunction.h"
 
+#include "DQuadFunction.h"
+
 #include "ColVariableSolution.h"
 
 #include <cmath>
@@ -110,19 +112,51 @@ static double primal_value( const SVMBlock * svm )
  const Index n = svm->get_NSamples();
  const double b = svm->get_b();
 
+ /* The regularisation term is rw/2 ( || w ||^2 [ + b^2 ] ), and || w ||^2 is
+  * the kernel expansion of the model against itself. */
+ const double rw = svm->get_reg_weight();
+
  double v = 0;
- for( Index i = 0 ; i < n ; ++i )
-  for( Index j = 0 ; j < n ; ++j )
-   v += c[ i ] * c[ j ] * K[ std::size_t( i ) * n + j ];
- v /= 2;
-
- if( svm->get_reg_bias() )
-  v += b * b / 2;
-
  doubleVec f( n , b );
- for( Index i = 0 ; i < n ; ++i )
-  for( Index j = 0 ; j < n ; ++j )
-   f[ i ] += c[ j ] * K[ std::size_t( j ) * n + i ];
+
+ if( svm->has_linear_term() ) {
+  /* The linear term of the primal takes the explicit feature map, hence the
+   * weights themselves, which the linear kernel it requires does have. */
+  auto & lambda = svm->get_linear_term();
+  const auto w = svm->get_w();
+  const Index m = svm->get_NFeatures();
+
+  for( Index j = 0 ; j < m ; ++j )
+   v += w[ j ] * w[ j ];
+  v *= rw / 2;
+
+  if( svm->get_reg_bias() )
+   v += rw * b * b / 2;
+
+  for( Index j = 0 ; j < m ; ++j )
+   v += ( lambda.empty() ? 0 : lambda[ j ] ) * w[ j ];
+
+  v += svm->get_linear_bias() * b;
+
+  for( Index i = 0 ; i < n ; ++i ) {
+   const double * xi = svm->get_x( i );
+   for( Index j = 0 ; j < m ; ++j )
+    f[ i ] += w[ j ] * xi[ j ];
+   }
+  }
+ else {
+  for( Index i = 0 ; i < n ; ++i )
+   for( Index j = 0 ; j < n ; ++j )
+    v += c[ i ] * c[ j ] * K[ std::size_t( i ) * n + j ];
+  v *= rw / 2;
+
+  if( svm->get_reg_bias() )
+   v += rw * b * b / 2;
+
+  for( Index i = 0 ; i < n ; ++i )
+   for( Index j = 0 ; j < n ; ++j )
+    f[ i ] += c[ j ] * K[ std::size_t( j ) * n + i ];
+  }
 
  for( Index k = 0 ; k < s.size() ; ++k ) {
   const double xi = std::max( double( 0 ) ,
@@ -359,6 +393,10 @@ static double from_scratch( const SVMBlock * svm )
  ref->load( svm->get_NSamples() , svm->get_NFeatures() , svm->get_X() ,
             svm->get_y() );
 
+ // the linear term is no hyper-parameter, but it is part of the problem
+ if( svm->has_linear_term() )
+  ref->set_linear_term( svm->get_linear_term() , svm->get_linear_bias() );
+
  const double value = train( ref );
 
  delete ref;
@@ -496,6 +534,188 @@ int main( int argc , char ** argv )
     check_abstract( & svm , SVMBlock::kWolfeDual , value ,
                     "abstract dual, " + tag );
     }
+  }
+
+ /* The weight of the regularisation term, which is what a chunk of the
+  * consensus structure carries a share of: it divides the Hessian of the
+  * dual, so this is the check that a Solver reading the dual, and the model
+  * it recovers from the multipliers, follow it. */
+
+ std::cout << "the weight of the regularisation term" << std::endl;
+ {
+  doubleVec X , y;
+  make_svc_data( 40 , 3 , X , y , 3 );
+
+  for( double rw : { 1.0 , 0.5 , 0.25 } ) {
+   const std::string tag = "rw = " + std::to_string( rw );
+
+   SVCBlock svm;
+   svm.set_kernel( SVMBlock::kLinear );
+   svm.set_C( 1 );
+   svm.set_reg_weight( rw );
+   svm.load( 40 , 3 , X , y );
+
+   const double value = train( & svm );
+
+   check_close( primal_value( & svm ) , value , 1e-6 ,
+                "strong duality, " + tag );
+   check_close( svm.dual_objective( svm.get_alphas() ) , value , 1e-8 ,
+                "dual objective, " + tag );
+   check_abstract( & svm , SVMBlock::kWolfeDual , value ,
+                   "abstract dual, " + tag );
+
+   SVCBlock prm;
+   prm.set_kernel( SVMBlock::kLinear );
+   prm.set_C( 1 );
+   prm.set_reg_weight( rw );
+   prm.load( 40 , 3 , X , y );
+   train( & prm );   // check_abstract() fills the Variable with the model
+   check_abstract( & prm , SVMBlock::kPrimal , value ,
+                   "abstract primal, " + tag );
+   }
+
+  // and it can be changed with the abstract representation there
+  for( int form = SVMBlock::kWolfeDual ; form <= SVMBlock::kPrimal ; ++form )
+   check_change( "SVCBlock" , form , X , y , 40 , 3 ,
+                 []( SVMBlock * svm ) { svm->set_reg_weight( 0.4 ); } ,
+                 std::string( form == SVMBlock::kWolfeDual ? "dual: "
+                                                           : "primal: " ) +
+                 "the weight of the regularisation" );
+  }
+
+ // the linear term of the primal - - - - - - - - - - - - - - - - - - - - - -
+ //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+ /* What the Lagrangian relaxation of the constraints linking a chunk of the
+  * consensus structure to the others leaves in the subproblem of that chunk:
+  * that the primal at the recovered model and the dual at the multipliers
+  * agree is what certifies that both are optimal. */
+
+ std::cout << "the linear term of the primal" << std::endl;
+ {
+  doubleVec X , y;
+  make_svc_data( 40 , 3 , X , y , 11 );
+
+  doubleVec lambda = { 0.7 , -0.4 , 0.2 };
+
+  for( int rb = 0 ; rb < 2 ; ++rb )
+   for( double rw : { 1.0 , 0.5 } )
+    for( double mu : { 0.0 , 0.3 , -1.5 } ) {
+     const std::string tag = std::string( rb ? "reg. bias, " : "" ) +
+                             "rw = " + std::to_string( rw ) +
+                             ", mu = " + std::to_string( mu );
+
+     SVCBlock svm;
+     svm.set_kernel( SVMBlock::kLinear );
+     svm.set_C( 1 );
+     svm.set_reg_bias( rb );
+     svm.set_reg_weight( rw );
+     svm.load( 40 , 3 , X , y );
+     svm.set_linear_term( lambda , mu );
+
+     const double value = train( & svm );
+
+     check_close( primal_value( & svm ) , value , 1e-6 ,
+                  "strong duality, " + tag );
+     check_close( svm.dual_objective( svm.get_alphas() ) , value , 1e-8 ,
+                  "dual objective, " + tag );
+     check_abstract( & svm , SVMBlock::kWolfeDual , value ,
+                     "abstract dual, " + tag );
+
+     // the equality constraint of the dual has mu as its right-hand side
+     if( ! rb ) {
+      auto eq = svm.get_static_constraint< FRowConstraint >( "eq" );
+      check( eq && ( eq->get_rhs() == mu ) && ( eq->get_lhs() == mu ) ,
+             "the right-hand side of the equality, " + tag );
+      }
+
+     SVCBlock prm;
+     prm.set_kernel( SVMBlock::kLinear );
+     prm.set_C( 1 );
+     prm.set_reg_bias( rb );
+     prm.set_reg_weight( rw );
+     prm.load( 40 , 3 , X , y );
+     prm.set_linear_term( lambda , mu );
+     train( & prm );  // check_abstract() fills the Variable with the model
+     check_abstract( & prm , SVMBlock::kPrimal , value ,
+                     "abstract primal, " + tag );
+     }
+
+  /* A Lagrangian Solver changes the multipliers at each of its iterations,
+   * and it does so by writing them into the Objective of the chunk: that
+   * this is mapped back into the physical representation is what lets the
+   * Solver reading the latter be used inside such a scheme, and each of the
+   * subproblems is re-optimized from the previous one. */
+  { SVCBlock svm;
+    svm.set_kernel( SVMBlock::kLinear );
+    svm.set_C( 1 );
+    svm.load( 40 , 3 , X , y );
+
+    SimpleConfiguration< int > cfg( SVMBlock::kPrimal );
+    svm.generate_abstract_variables( & cfg );
+    svm.generate_abstract_constraints();
+    svm.generate_objective();
+
+    auto solver = Solver::new_Solver( "SMOSolver" );
+    solver->set_par( SMOSolver::dblSMOTol , 1e-10 );
+    svm.register_Solver( solver );
+    resolve( solver );
+
+    auto qf = static_cast< DQuadFunction * >(
+     static_cast< FRealObjective * >( svm.get_objective() )->get_function() );
+
+    for( double t : { 1.0 , -0.5 , 2.0 , 0.0 } ) {
+     const std::string tag = "t = " + std::to_string( t );
+
+     // what a Lagrangian Solver writes into the Objective of the chunk
+     doubleVec lin( 4 );
+     for( Index j = 0 ; j < 3 ; ++j )
+      lin[ j ] = t * lambda[ j ];
+     lin[ 3 ] = t * 0.2;
+
+     qf->modify_linear_coefficients( doubleVec( lin ) ,
+                                     Block::Subset( { 0 , 1 , 2 , 3 } ) ,
+                                     true ,
+                                     eModBlck );
+
+     bool ok = ( svm.get_linear_bias() == lin[ 3 ] );
+     if( t )
+      ok &= ( svm.get_linear_term() == doubleVec( lin.begin() ,
+                                                  lin.begin() + 3 ) );
+     else
+      ok &= ( ! svm.has_linear_term() );
+
+     check( ok , "the linear term is mapped back, " + tag );
+
+     check_close( resolve( solver ) , from_scratch( & svm ) , 1e-6 ,
+                  "re-optimization after the linear term, " + tag );
+     }
+
+    svm.unregister_Solver( solver );
+    delete solver;
+    }
+
+  // a zero linear term is the same as no linear term at all
+  { SVCBlock svm;
+    svm.set_kernel( SVMBlock::kLinear );
+    svm.set_C( 1 );
+    svm.load( 40 , 3 , X , y );
+    const double value = train( & svm );
+
+    svm.set_linear_term( doubleVec( 3 , 0 ) , 0 );
+    check( ! svm.has_linear_term() , "a zero linear term is no linear term" );
+    check_close( train( & svm ) , value , 1e-9 , "the same optimal value" );
+    }
+
+  // and it can be changed with the abstract representation there
+  for( int form = SVMBlock::kWolfeDual ; form <= SVMBlock::kPrimal ; ++form )
+   check_change( "SVCBlock" , form , X , y , 40 , 3 ,
+                 [ &lambda ]( SVMBlock * svm ) {
+                  svm->set_kernel( SVMBlock::kLinear );
+                  svm->set_linear_term( lambda , 0.2 );
+                  } ,
+                 std::string( form == SVMBlock::kWolfeDual ? "dual: "
+                                                           : "primal: " ) +
+                 "the linear term" );
   }
 
  // the same, but through the primal formulation- - - - - - - - - - - - - - -
@@ -743,6 +963,27 @@ int main( int argc , char ** argv )
   for( Index j = 0 ; j < m ; ++j )
    dfather = std::max( dfather , std::abs( wf[ j ] - w[ j ] ) );
   check( dfather < 1e-12 , "the model is read out of the father Block" );
+
+  /* A hyper-parameter can be changed with the structure in place: no local
+   * change of the abstract representation can do it, the chunks holding a
+   * copy of it, hence they are dealt out anew and the rewriting has to stay
+   * exact. */
+  ref.set_C( 5 );
+  const double nvalue = train( & ref );
+  const auto nw = ref.get_w();
+  const double nb = ref.get_b();
+
+  cns.set_C( 5 );
+
+  double nsum = 0;
+  for( Index p = 0 ; p < P ; ++p ) {
+   auto sub = dynamic_cast< SVMBlock * >( dec->get_nested_Block( p ) );
+   fill_primal( sub , nw , nb );
+   nsum += objective_value( sub );
+   }
+
+  check_close( nsum , nvalue , 1e-8 ,
+               "the rewriting is exact after a hyper-parameter changes" );
 
   // the structure can no longer be changed once the abstract representation
   // is there, the Constraint tying the chunks that are there

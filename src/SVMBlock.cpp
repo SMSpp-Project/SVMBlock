@@ -79,6 +79,18 @@ static constexpr double dBndEps = 1e-8;
 static constexpr SVMBlock::Index dParallelK = 256;
 
 /*--------------------------------------------------------------------------*/
+// < lambda , x >, with an empty lambda standing for the zero vector
+
+static double lambda_x( const SVMBlock::doubleVec & lambda , const double * x )
+{
+ double d = 0;
+ for( SVMBlock::Index j = 0 ; j < lambda.size() ; ++j )
+  d += lambda[ j ] * x[ j ];
+
+ return( d );
+ }
+
+/*--------------------------------------------------------------------------*/
 /*--------------------- CONSTRUCTOR AND DESTRUCTOR -------------------------*/
 /*--------------------------------------------------------------------------*/
 
@@ -269,6 +281,9 @@ void SVMBlock::guts_of_load( void )
  v_K.clear();       // the data set changed, and so did everything that is
  v_dcoef.clear();   // derived from it
  f_gamma_res = 0;
+
+ if( v_lambda.size() != f_m )   // the linear term is a vector of features
+  v_lambda.clear();
 
  set_dual_data();   // rebuild the parametric map
 
@@ -493,9 +508,12 @@ void SVMBlock::set_reg_weight( double weight , ModParam issueMod ,
 
  f_reg_weight = weight;
 
- // only the primal is written in terms of the weight of the regularisation
- // term, and only its Objective
- update_abstract( ( AR & PrimalF ) ? eARObjective : eARNone , issueMod ,
+ /* In the primal the weight is a coefficient of the Objective, hence a local
+  * change; in the dual it divides the Hessian as a whole, the off-diagonal
+  * terms included, and those are not modified in place [see
+  * update_abstract_objective()], whence the abstract representation is
+  * rebuilt. */
+ update_abstract( ( AR & PrimalF ) ? eARObjective : eARAll , issueMod ,
                   issueAMod );
 
  if( issue_pmod( issueMod ) )
@@ -504,6 +522,171 @@ void SVMBlock::set_reg_weight( double weight , ModParam issueMod ,
                            Observer::par2chnl( issueMod ) );
 
  }  // end( SVMBlock::set_reg_weight )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::set_linear_term( c_doubleVec & lambda , double mu ,
+                                ModParam issueMod , ModParam issueAMod )
+{
+ static const std::string _prfx = "SVMBlock::set_linear_term: ";
+
+ if( ! lambda.empty() ) {
+  if( lambda.size() != f_m )
+   throw( std::invalid_argument( _prfx + "lambda has wrong size" ) );
+
+  if( f_kernel != kLinear )
+   throw( std::invalid_argument( _prfx + "the linear term takes the explicit "
+                                 "feature map, which only the linear kernel "
+                                 "has" ) );
+  }
+
+ // an all-zero lambda is the same as no lambda at all
+ const bool zero = std::all_of( lambda.begin() , lambda.end() ,
+                                []( double lj ) { return( lj == 0 ); } );
+
+ if( ( mu == f_mu ) &&
+     ( zero ? v_lambda.empty()
+            : ( v_lambda.size() == lambda.size() ) &&
+              std::equal( lambda.begin() , lambda.end() , v_lambda.begin() ) )
+     )
+  return;
+
+ if( ! not_dry_run( issueMod ) )
+  return;
+
+ if( zero )
+  v_lambda.clear();
+ else
+  v_lambda = lambda;
+
+ f_mu = mu;
+
+ /* Both formulations only change locally: in the primal the term is the
+  * linear coefficients of the weights and of the bias, in the dual it shifts
+  * the linear coefficients and, if the bias is not regularised, the
+  * right-hand side of the equality constraint. */
+ update_abstract( eARObjective | eARSides , issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockMod >(
+                            this , SVMBlockMod::eChgLinTerm ) ,
+                           Observer::par2chnl( issueMod ) );
+
+ }  // end( SVMBlock::set_linear_term )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::get_dual_shifts( doubleVec & shift ) const
+{
+ const Index N = get_NDual();
+ shift.assign( N , 0 );
+
+ if( ! has_linear_term() )
+  return;
+
+ // the term in mu is only in the dual if the bias is regularised, for
+ // otherwise mu is the right-hand side of the equality constraint
+ const double mu = f_reg_bias ? f_mu : 0;
+
+ // < lambda , x_i > for each sample, the same for all its dual indices
+ doubleVec lx( f_n , 0 );
+ if( ! v_lambda.empty() )
+  for( Index i = 0 ; i < f_n ; ++i ) {
+   const double * xi = get_x( i );
+   double d = 0;
+   for( Index j = 0 ; j < f_m ; ++j )
+    d += v_lambda[ j ] * xi[ j ];
+   lx[ i ] = d;
+   }
+
+ for( Index k = 0 ; k < N ; ++k )
+  shift[ k ] = v_ds[ k ] * ( lx[ v_di[ k ] ] + mu ) / f_reg_weight;
+
+ }  // end( SVMBlock::get_dual_shifts )
+
+/*--------------------------------------------------------------------------*/
+
+double SVMBlock::get_dual_constant( void ) const
+{
+ if( ! has_linear_term() )
+  return( 0 );
+
+ double c = f_reg_bias ? f_mu * f_mu : 0;
+ for( auto lj : v_lambda )
+  c += lj * lj;
+
+ return( - c / ( 2 * f_reg_weight ) );
+
+ }  // end( SVMBlock::get_dual_constant )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::add_Modification( sp_Mod mod , ChnlName chnl )
+{
+ if( mod->concerns_Block() ) {
+  mod->concerns_Block( false );
+  guts_of_add_Modification( mod.get() );
+  }
+
+ Block::add_Modification( mod , chnl );
+
+ }  // end( SVMBlock::add_Modification )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::guts_of_add_Modification( const Modification * mod )
+{
+ if( auto gm = dynamic_cast< const GroupModification * >( mod ) ) {
+  for( const auto & sm : gm->sub_Modifications() )
+   guts_of_add_Modification( sm.get() );
+  return;
+  }
+
+ /* The only change of the abstract representation that the physical one can
+  * express is the linear term of the primal: whatever else has been done to
+  * it is left alone, since the two are no longer in agreement anyway. */
+
+ auto fm = dynamic_cast< const FunctionMod * >( mod );
+
+ if( ( ! fm ) || ( ! ( AR & PrimalF ) ) || ( ! ( AR & HasObj ) ) ||
+     ( fm->function() != f_obj.get_function() ) )
+  return;
+
+ /* Which coefficients have changed is not worth telling apart: they are all
+  * read anew, the Objective having m + 1 of them beside those of the slacks
+  * and the weights coming first. */
+
+ auto qf = static_cast< DQuadFunction * >( f_obj.get_function() );
+
+ doubleVec lambda( f_m );
+ bool zero = true;
+ for( Index j = 0 ; j < f_m ; ++j )
+  if( ( lambda[ j ] = qf->get_linear_coefficient( j ) ) )
+   zero = false;
+
+ const double mu = qf->get_linear_coefficient( f_m );
+
+ if( ( mu == f_mu ) &&
+     ( zero ? v_lambda.empty()
+            : ( v_lambda.size() == f_m ) &&
+              std::equal( lambda.begin() , lambda.end() , v_lambda.begin() ) )
+     )
+  return;   // nothing has changed after all
+
+ /* The abstract representation already has the new term: only the physical
+  * one has to be aligned, and the Solver reading it told about it. */
+
+ if( zero )
+  v_lambda.clear();
+ else
+  v_lambda = std::move( lambda );
+
+ f_mu = mu;
+
+ Block::add_Modification( std::make_shared< SVMBlockMod >(
+                           this , SVMBlockMod::eChgLinTerm ) );
+
+ }  // end( SVMBlock::guts_of_add_Modification )
 
 /*--------------------------------------------------------------------------*/
 
@@ -855,14 +1038,19 @@ void SVMBlock::add_abstract_samples( Index kk , ModParam issueAMod )
    auto & K = get_K();
    const double rb = f_reg_bias ? 1 : 0;
    const double d = f_squared_loss ? 1 / ( 2 * f_C ) : 0;
+   const double rw = f_reg_weight;
+
+   doubleVec shift;
+   get_dual_shifts( shift );
 
    v_coeff_triple triples( kk );
    for( Index k = 0 ; k < kk ; ++k ) {
     const double sk = v_ds[ o_N + k ];
     const Index ik = v_di[ o_N + k ];
     triples[ k ] = std::make_tuple(
-     pa[ k ] , - v_dq[ o_N + k ] ,
-     - ( sk * sk * ( K[ std::size_t( ik ) * f_n + ik ] + rb ) + d ) / 2 );
+     pa[ k ] , - v_dq[ o_N + k ] + shift[ o_N + k ] ,
+     - ( sk * sk * ( K[ std::size_t( ik ) * f_n + ik ] + rb ) / rw + d )
+     / 2 );
     }
 
    v_off_diag_term off_diag;
@@ -871,7 +1059,7 @@ void SVMBlock::add_abstract_samples( Index kk , ModParam issueAMod )
     const double sk = v_ds[ k ];
     const std::size_t ik = std::size_t( v_di[ k ] ) * f_n;
     for( Index l = 0 ; l < k ; ++l ) {
-     const double Qkl = sk * v_ds[ l ] * ( K[ ik + v_di[ l ] ] + rb );
+     const double Qkl = sk * v_ds[ l ] * ( K[ ik + v_di[ l ] ] + rb ) / rw;
      if( Qkl )
       off_diag.emplace_back( k , l , - Qkl );
      }
@@ -1102,7 +1290,11 @@ void SVMBlock::update_abstract( unsigned char what , ModParam issueMod ,
  if( ( ! AR ) || ( what == eARNone ) || ( ! not_dry_run( issueAMod ) ) )
   return;
 
- if( what & eARAll ) {
+ /* With the consensus structure the abstract representation is all in the
+  * chunks, which hold a copy of the data and of the hyper-parameters: no
+  * change of theirs can be made in place there, whence the whole thing is
+  * dealt out anew, exactly as if everything had changed. */
+ if( ( what & eARAll ) || ( AR & Consensus ) ) {
   rebuild_abstract( issueMod );
   return;
   }
@@ -1138,8 +1330,16 @@ void SVMBlock::update_abstract_bounds( ModParam issueAMod )
 
 void SVMBlock::update_abstract_sides( ModParam issueAMod )
 {
- if( ! ( AR & PrimalF ) )  // the dual has no side depending on the data
+ if( ! ( AR & PrimalF ) ) {
+  /* The only side of the dual is the right-hand side of the equality
+   * constraint, which is the coefficient of the bias in the linear term of
+   * the primal [see set_linear_term()]; if the bias is regularised there is
+   * no equality constraint, and the coefficient rather is in the Objective. */
+  if( ( ! f_reg_bias ) && ( f_eq.get_rhs() != f_mu ) )
+   f_eq.set_both( f_mu , un_ModBlock( issueAMod ) );
+
   return;
+  }
 
  Index k = 0;
  for( auto & ck : v_cons ) {
@@ -1164,13 +1364,17 @@ void SVMBlock::update_abstract_objective( ModParam issueAMod )
   auto & K = get_K();
   const double rb = f_reg_bias ? 1 : 0;
   const double d = f_squared_loss ? 1 / ( 2 * f_C ) : 0;
+  const double rw = f_reg_weight;
+
+  doubleVec shift;
+  get_dual_shifts( shift );
 
   doubleVec quad( N ) , lin( N );
   for( Index k = 0 ; k < N ; ++k ) {
    const double sk = v_ds[ k ];
    const double Kkk = K[ std::size_t( v_di[ k ] ) * f_n + v_di[ k ] ];
-   lin[ k ] = - v_dq[ k ];
-   quad[ k ] = - ( sk * sk * ( Kkk + rb ) + d ) / 2;
+   lin[ k ] = - v_dq[ k ] + shift[ k ];
+   quad[ k ] = - ( sk * sk * ( Kkk + rb ) / rw + d ) / 2;
    }
 
   /* The diagonal and the linear coefficients of a QuadFunction are those of
@@ -1179,6 +1383,9 @@ void SVMBlock::update_abstract_objective( ModParam issueAMod )
   static_cast< DQuadFunction * >( f_obj.get_function()
    )->modify_terms( quad.begin() , lin.begin() , Range( 0 , N ) ,
                     un_ModBlock( issueAMod ) );
+
+  static_cast< DQuadFunction * >( f_obj.get_function()
+   )->set_constant_term( get_dual_constant() , un_ModBlock( issueAMod ) );
   return;
   }
 
@@ -1190,10 +1397,14 @@ void SVMBlock::update_abstract_objective( ModParam issueAMod )
 
  doubleVec quad( tot ) , lin( tot , 0 );
 
- for( Index j = 0 ; j < f_m ; ++j )
+ for( Index j = 0 ; j < f_m ; ++j ) {
   quad[ j ] = rw;
+  if( ! v_lambda.empty() )
+   lin[ j ] = v_lambda[ j ];
+  }
 
  quad[ f_m ] = f_reg_bias ? rw : 0;
+ lin[ f_m ] = f_mu;
 
  for( Index k = 0 ; k < N ; ++k ) {
   quad[ f_m + 1 + k ] = f_squared_loss ? f_C : 0;
@@ -1671,7 +1882,9 @@ void SVMBlock::generate_abstract_constraints( Configuration * stcc )
       coeffs[ k ] = std::make_pair( &(*(ak++)) , v_ds[ k ] );
      }
 
-   f_eq.set_both( 0 );
+   // the right-hand side is the coefficient of the bias in the linear term
+   // of the primal, which is zero save for a chunk [see set_linear_term()]
+   f_eq.set_both( f_mu );
    f_eq.set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
 
    add_static_constraint( f_eq , "eq" );
@@ -1763,13 +1976,26 @@ void SVMBlock::generate_objective( Configuration * objc )
   const double rb = f_reg_bias ? 1 : 0;
   const double d = f_squared_loss ? 1 / ( 2 * f_C ) : 0;
 
+  /* The Hessian of the dual is the Gram matrix reweighted by the signs and
+   * *divided by the weight of the regularisation term*, which is 1 unless
+   * this is a chunk of the consensus structure: dualising rw/2 || w ||^2
+   * leaves w = ( sum_k alpha_k s_k x_k ) / rw. The diagonal term of the
+   * squared loss comes from the slacks instead, and is not divided. */
+  const double rw = f_reg_weight;
+
+  // the linear term of the primal shifts the linear coefficients of the dual
+  // and adds a constant to it [see set_linear_term()]
+  doubleVec shift;
+  get_dual_shifts( shift );
+
   v_coeff_triple triples( N );
   { auto ak = v_alpha_var.begin();
     for( Index k = 0 ; k < N ; ++k , ++ak ) {
      const double sk = v_ds[ k ];
      const double Kkk = K[ std::size_t( v_di[ k ] ) * f_n + v_di[ k ] ];
-     triples[ k ] = std::make_tuple( &(*ak) , - v_dq[ k ] ,
-                                     - ( sk * sk * ( Kkk + rb ) + d ) / 2 );
+     triples[ k ] = std::make_tuple( &(*ak) , - v_dq[ k ] + shift[ k ] ,
+                                     - ( sk * sk * ( Kkk + rb ) / rw + d )
+                                     / 2 );
      }
     }
 
@@ -1779,15 +2005,15 @@ void SVMBlock::generate_objective( Configuration * objc )
    const double sk = v_ds[ k ];
    const std::size_t ik = std::size_t( v_di[ k ] ) * f_n;
    for( Index l = 0 ; l < k ; ++l ) {
-    const double Qkl = sk * v_ds[ l ] * ( K[ ik + v_di[ l ] ] + rb );
+    const double Qkl = sk * v_ds[ l ] * ( K[ ik + v_di[ l ] ] + rb ) / rw;
     if( Qkl )
      off_diag.emplace_back( k , l , - Qkl );
     }
    }
 
   f_obj.set_function( new QuadFunction( std::move( triples ) ,
-                                        std::move( off_diag ) , 0 ) ,
-                      eNoMod );
+                                        std::move( off_diag ) ,
+                                        get_dual_constant() ) , eNoMod );
 
   f_obj.set_sense( Objective::eMax , eNoMod );
   set_objective( & f_obj , eNoMod );
@@ -1804,10 +2030,14 @@ void SVMBlock::generate_objective( Configuration * objc )
 
   v_coeff_triple triples( f_m + 1 + N );
 
+  // the linear term, which is zero save for a chunk whose linking
+  // constraints have been relaxed [see set_linear_term()]
   for( Index j = 0 ; j < f_m ; ++j )
-   triples[ j ] = std::make_tuple( & v_w[ j ] , double( 0 ) , rw );
+   triples[ j ] = std::make_tuple( & v_w[ j ] ,
+                                   v_lambda.empty() ? double( 0 )
+                                                    : v_lambda[ j ] , rw );
 
-  triples[ f_m ] = std::make_tuple( & f_b_var , double( 0 ) ,
+  triples[ f_m ] = std::make_tuple( & f_b_var , f_mu ,
                                     f_reg_bias ? rw : double( 0 ) );
 
   { Index k = 0;
@@ -1982,9 +2212,14 @@ SVMBlock::c_doubleVec & SVMBlock::get_dual_coefficients( void ) const
  if( v_dcoef.size() == f_n )
   return( v_dcoef );
 
+ /* The stationarity of the primal gives w = ( sum_k alpha_k s_k x_k ) / rw
+  * with rw the weight of the regularisation term, whence the coefficients of
+  * the kernel expansion carry that division as well. */
+
  v_dcoef.assign( f_n , 0 );
  for( Index k = 0 ; k < f_training_Results->v_alpha.size() ; ++k )
-  v_dcoef[ v_di[ k ] ] += v_ds[ k ] * f_training_Results->v_alpha[ k ];
+  v_dcoef[ v_di[ k ] ] += v_ds[ k ] * f_training_Results->v_alpha[ k ]
+                          / f_reg_weight;
 
  return( v_dcoef );
 
@@ -2012,6 +2247,10 @@ SVMBlock::doubleVec SVMBlock::get_w( void ) const
    w[ j ] += c[ i ] * xi[ j ];
   }
 
+ // the linear term of the primal shifts the weights [see set_linear_term()]
+ for( Index j = 0 ; j < v_lambda.size() ; ++j )
+  w[ j ] -= v_lambda[ j ] / f_reg_weight;
+
  return( w );
 
  }  // end( SVMBlock::get_w )
@@ -2033,6 +2272,10 @@ double SVMBlock::decision_function( const double * x ) const
  for( Index i = 0 ; i < f_n ; ++i )
   if( c[ i ] )
    d += c[ i ] * kernel( get_x( i ) , x );
+
+ // the linear term of the primal shifts the weights [see set_linear_term()]
+ if( ! v_lambda.empty() )
+  d -= lambda_x( v_lambda , x ) / f_reg_weight;
 
  return( d );
 
@@ -2072,15 +2315,23 @@ double SVMBlock::dual_objective( c_doubleVec & alpha ) const
   quad += sa * sa;
   }
 
+ // the Gram part of the Hessian is divided by the weight of the
+ // regularisation term, the diagonal of the squared loss is not
+ quad /= f_reg_weight;
+
+ doubleVec shift;
+ get_dual_shifts( shift );
+
  double lin = 0;
  for( Index k = 0 ; k < N ; ++k ) {
-  lin += v_dq[ k ] * alpha[ k ];
+  lin += ( v_dq[ k ] - shift[ k ] ) * alpha[ k ];
   if( d )
    quad += d * alpha[ k ] * alpha[ k ];
   }
 
- // the Wolfe dual is maximised, hence the opposite of the quadratic form
- return( - ( quad / 2 + lin ) );
+ // the Wolfe dual is maximised, hence the opposite of the quadratic form,
+ // plus the constant that the linear term of the primal adds to it
+ return( - ( quad / 2 + lin ) + get_dual_constant() );
 
  }  // end( SVMBlock::dual_objective )
 
@@ -2094,7 +2345,7 @@ void SVMBlock::compute_bias( void )
   double b = 0;
   for( Index k = 0 ; k < f_training_Results->v_alpha.size() ; ++k )
    b += v_ds[ k ] * f_training_Results->v_alpha[ k ];
-  f_training_Results->f_b = b;
+  f_training_Results->f_b = ( b - f_mu ) / f_reg_weight;
   return;
   }
 
@@ -2120,6 +2371,10 @@ void SVMBlock::compute_bias( void )
   for( Index j = 0 ; j < f_n ; ++j )
    if( c[ j ] )
     g += c[ j ] * K[ ii + j ];
+
+  // the linear term of the primal shifts the weights [see set_linear_term()]
+  if( ! v_lambda.empty() )
+   g -= lambda_x( v_lambda , get_x( i ) ) / f_reg_weight;
 
   const double xik = f_squared_loss ? ak / ( 2 * f_C ) : 0;
   sum += v_ds[ k ] * ( - v_dq[ k ] - xik ) - g;

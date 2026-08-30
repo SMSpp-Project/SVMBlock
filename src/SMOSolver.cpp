@@ -116,14 +116,29 @@ int SMOSolver::compute( bool changedvars )
  if( f_rb ) {
   status = solve_box();
 
-  // with the bias regularised there is no equality constraint, and the bias
-  // is just one more component of the weight vector
-  f_b = 0;
+  /* With the bias regularised there is no equality constraint, and the bias
+   * is just one more component of the weight vector, whence the division by
+   * the weight of the regularisation term and the linear term of the primal
+   * [see SVMBlock::set_linear_term()]. */
+  double sa = 0;
   for( Index k = 0 ; k < f_N ; ++k )
-   f_b += f_ds[ k ] * v_alpha[ k ];
+   sa += f_ds[ k ] * v_alpha[ k ];
+
+  f_b = ( sa - f_SVM->get_linear_bias() ) / f_rw;
   }
- else
+ else {
+  /* The multipliers have to satisfy the equality constraint before the SMO
+   * iteration starts, since it keeps s^T alpha where it finds it: they do,
+   * unless its right-hand side has just changed or they come from the
+   * origin. */
+  if( ! restore_equality() ) {
+   f_solved = false;
+   unlock();
+   return( kUnbounded );
+   }
+
   status = solve_with_equality();
+  }
 
  // the value of the dual at the solution: 1/2 alpha^T Q alpha + q^T alpha =
  // 1/2 alpha^T ( G + q ), since G = Q alpha + q
@@ -137,7 +152,7 @@ int SMOSolver::compute( bool changedvars )
   * written as the maximisation whose value strong duality makes equal to the
   * primal's. Hence the sign, once and for all, with no dependence on what the
   * abstract representation happens to be. */
- f_value = - v / 2;
+ f_value = - v / 2 + f_dc;
 
  f_solved = true;
 
@@ -287,13 +302,28 @@ void SMOSolver::reload( void )
  f_u = f_SVM->get_ub();
  f_rb = f_SVM->get_reg_bias() ? 1 : 0;
  f_d = f_SVM->get_squared_loss() ? 1 / ( 2 * f_SVM->get_C() ) : 0;
+ f_rw = f_SVM->get_reg_weight();
 
  f_K = f_SVM->get_K().data();
  f_di = f_SVM->get_dual_samples().data();
 
  v_s = f_SVM->get_dual_signs();
- v_q = f_SVM->get_dual_costs();
  v_di_c = f_SVM->get_dual_samples();
+
+ /* The linear term of the primal shifts the linear coefficients of the dual,
+  * moves the right-hand side of the equality constraint and adds a constant
+  * to the value [see SVMBlock::set_linear_term()]: it is folded into the data
+  * of the dual once and for all here, so that the algorithm need not know
+  * about it. */
+ v_q = f_SVM->get_dual_costs();
+ { doubleVec shift;
+   f_SVM->get_dual_shifts( shift );
+   for( Index k = 0 ; k < f_N ; ++k )
+    v_q[ k ] -= shift[ k ];
+   }
+
+ f_mu = f_rb ? 0 : f_SVM->get_linear_bias();
+ f_dc = f_SVM->get_dual_constant();
  f_ds = v_s.data();
  f_dq = v_q.data();
 
@@ -342,6 +372,7 @@ bool SMOSolver::resample( void )
  f_N = N;
  f_u = f_SVM->get_ub();
  f_d = f_SVM->get_squared_loss() ? 1 / ( 2 * f_SVM->get_C() ) : 0;
+ f_rw = f_SVM->get_reg_weight();
  f_K = f_SVM->get_K().data();
  f_di = di.data();
  v_s = s;
@@ -457,12 +488,36 @@ bool SMOSolver::resync( void )
 
  f_u = u;
 
- auto & q = f_SVM->get_dual_costs();
- for( Index k = 0 ; k < f_N ; ++k )
-  if( q[ k ] != v_q[ k ] ) {
-   v_G[ k ] += q[ k ] - v_q[ k ];
-   v_q[ k ] = q[ k ];
+ /* The weight of the regularisation term divides the Hessian, hence changing
+  * it scales the part of the gradient that comes from it: G - q - d alpha is
+  * the Gram part, which is what gets rescaled. */
+
+ const double rw = f_SVM->get_reg_weight();
+
+ if( rw != f_rw ) {
+  const double rho = f_rw / rw;
+  for( Index k = 0 ; k < f_N ; ++k ) {
+   const double dk = f_d * v_alpha[ k ];
+   v_G[ k ] = rho * ( v_G[ k ] - v_q[ k ] - dk ) + dk + v_q[ k ];
    }
+  f_rw = rw;
+  }
+
+ auto & q = f_SVM->get_dual_costs();
+
+ doubleVec shift;
+ f_SVM->get_dual_shifts( shift );
+
+ for( Index k = 0 ; k < f_N ; ++k ) {
+  const double qk = q[ k ] - shift[ k ];
+  if( qk != v_q[ k ] ) {
+   v_G[ k ] += qk - v_q[ k ];
+   v_q[ k ] = qk;
+   }
+  }
+
+ f_mu = f_rb ? 0 : f_SVM->get_linear_bias();
+ f_dc = f_SVM->get_dual_constant();
 
  const double d = f_SVM->get_squared_loss() ? 1 / ( 2 * f_SVM->get_C() ) : 0;
 
@@ -475,6 +530,69 @@ bool SMOSolver::resync( void )
  return( true );
 
  }  // end( SMOSolver::resync )
+
+/*--------------------------------------------------------------------------*/
+
+bool SMOSolver::restore_equality( void )
+{
+ double sa = 0;
+ for( Index k = 0 ; k < f_N ; ++k )
+  sa += f_ds[ k ] * v_alpha[ k ];
+
+ double diff = f_mu - sa;   // how much s^T alpha has to change
+
+ const double eps = 1e-10 * ( 1 + std::abs( f_mu ) );
+
+ /* One multiplier at a time is moved as far as its bounds allow in the
+  * direction that reduces the residual, which takes the fewest of them that
+  * can do it; the gradient is updated along with each of them, exactly as
+  * the SMO step does. Closing the residual with the multiplier k costs
+  * G_k s_k diff to the first order, whence the one that is moved is the one
+  * for which this is smallest: this is what keeps the point the iteration
+  * starts from a good one, and it is all the more so when the multipliers
+  * are unbounded above, in which case any one of them could do it alone. */
+
+ while( std::abs( diff ) > eps ) {
+  Index h = f_N;
+  double best = Inf< double >();
+
+  for( Index k = 0 ; k < f_N ; ++k ) {
+   const double sk = f_ds[ k ];
+   const double room = ( diff * sk > 0 ) ? f_u - v_alpha[ k ] : v_alpha[ k ];
+   if( room <= 0 )
+    continue;
+
+   const double cost = v_G[ k ] * sk * diff;
+   if( cost < best ) { best = cost; h = k; }
+   }
+
+  if( h == f_N )   // no multiplier can be moved any further
+   return( false );
+
+  const double sh = f_ds[ h ];
+  double t = diff * sh;   // the move that would close the residual at once
+
+  t = std::max( - v_alpha[ h ] , std::min( t , f_u - v_alpha[ h ] ) );
+
+  if( ! t )   // the room there is is below the precision of the sum
+   return( false );
+
+  v_alpha[ h ] += t;
+  diff -= sh * t;
+
+  const double * Kh = f_K + std::size_t( f_di[ h ] ) * f_n;
+  const double dh = sh * t / f_rw;
+
+  for( Index l = 0 ; l < f_N ; ++l )
+   v_G[ l ] += f_ds[ l ] * ( Kh[ f_di[ l ] ] + f_rb ) * dh;
+
+  if( f_d )   // the diagonal term is not part of the kernel expansion
+   v_G[ h ] += f_d * t;
+  }
+
+ return( true );
+
+ }  // end( SMOSolver::restore_equality )
 
 /*--------------------------------------------------------------------------*/
 
@@ -565,9 +683,14 @@ int SMOSolver::solve_with_equality( void )
   const double * Ki = f_K + std::size_t( f_di[ i ] ) * f_n;
   const double * Kj = f_K + std::size_t( f_di[ j ] ) * f_n;
 
+  /* The Hessian is the reweighted Gram matrix divided by the weight of the
+   * regularisation term [see Q()], which is read here directly rather than
+   * through it: this is the innermost loop of the algorithm. */
+  const double di = si * dai / f_rw , dj = sj * daj / f_rw;
+
   for( Index k = 0 ; k < f_N ; ++k )
-   v_G[ k ] += f_ds[ k ] * ( si * ( Ki[ f_di[ k ] ] + f_rb ) * dai +
-                             sj * ( Kj[ f_di[ k ] ] + f_rb ) * daj );
+   v_G[ k ] += f_ds[ k ] * ( ( Ki[ f_di[ k ] ] + f_rb ) * di +
+                             ( Kj[ f_di[ k ] ] + f_rb ) * dj );
 
   if( f_d ) {  // the diagonal term is not part of the kernel expansion
    v_G[ i ] += f_d * dai;
@@ -625,8 +748,10 @@ int SMOSolver::solve_box( void )
   const double si = f_ds[ i ];
   const double * Ki = f_K + std::size_t( f_di[ i ] ) * f_n;
 
+  const double di = si * dai / f_rw;   // as in solve_with_equality()
+
   for( Index k = 0 ; k < f_N ; ++k )
-   v_G[ k ] += f_ds[ k ] * si * ( Ki[ f_di[ k ] ] + f_rb ) * dai;
+   v_G[ k ] += f_ds[ k ] * ( Ki[ f_di[ k ] ] + f_rb ) * di;
 
   if( f_d )
    v_G[ i ] += f_d * dai;

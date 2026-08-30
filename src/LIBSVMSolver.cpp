@@ -210,6 +210,11 @@ void LIBSVMSolver::check_supported( void ) const
   throw( std::invalid_argument( _prfx + "LIBSVM has no weight on the "
                                 "regularisation term" ) );
 
+ if( f_SVM->has_linear_term() )
+  throw( std::invalid_argument( _prfx + "LIBSVM has no linear term in the "
+                                "primal, hence it cannot solve the "
+                                "subproblem of a chunk" ) );
+
  if( f_SVM->get_kernel_type() == SVMBlock::kLaplacian )
   throw( std::invalid_argument( _prfx + "LIBSVM has no Laplacian kernel" ) );
 
