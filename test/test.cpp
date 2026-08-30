@@ -694,6 +694,48 @@ int main( int argc , char ** argv )
     delete solver;
     }
 
+  /* The feasible set of the dual is { 0 <= alpha <= C , s^T alpha = mu },
+   * which is empty as soon as mu goes beyond C times the number of dual
+   * indices of the corresponding sign: the subproblem of the chunk is then
+   * unbounded in the bias, and this has to be *proved*, not guessed, since a
+   * wrong answer here would silently become a wrong Lagrangian bound. */
+  { const Index np = 20;   // the samples of each class, hence C np = 20
+
+    for( double mu : { 19.9 , 20.0 , 20.1 , -20.0 , -20.1 } ) {
+     SVCBlock svm;
+     svm.set_kernel( SVMBlock::kLinear );
+     svm.set_C( 1 );
+     svm.load( 40 , 3 , X , y );
+     svm.set_linear_term( lambda , mu );
+
+     auto solver = Solver::new_Solver( "SMOSolver" );
+     solver->set_par( SMOSolver::dblSMOTol , 1e-10 );
+     svm.register_Solver( solver );
+
+     const int status = solver->compute();
+     const bool empty = std::abs( mu ) > np;
+     const std::string tag = "mu = " + std::to_string( mu );
+
+     if( empty )
+      check( status == Solver::kUnbounded ,
+             "the empty dual is proved empty, " + tag );
+     else {
+      solver->get_var_solution();
+      double sa = 0;
+      auto & alpha = svm.get_alphas();
+      auto & sg = svm.get_dual_signs();
+      for( Index k = 0 ; k < alpha.size() ; ++k )
+       sa += sg[ k ] * alpha[ k ];
+
+      check( ( status == Solver::kOK ) && ( std::abs( sa - mu ) < 1e-9 ) ,
+             "the equality constraint is satisfied, " + tag );
+      }
+
+     svm.unregister_Solver( solver );
+     delete solver;
+     }
+    }
+
   // a zero linear term is the same as no linear term at all
   { SVCBlock svm;
     svm.set_kernel( SVMBlock::kLinear );
