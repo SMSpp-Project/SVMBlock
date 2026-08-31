@@ -1294,7 +1294,7 @@ void SVMBlock::update_abstract( unsigned char what , ModParam issueMod ,
   * chunks, which hold a copy of the data and of the hyper-parameters: no
   * change of theirs can be made in place there, whence the whole thing is
   * dealt out anew, exactly as if everything had changed. */
- if( ( what & eARAll ) || ( AR & Consensus ) ) {
+ if( ( what & eARAll ) || ( AR & ( Consensus | Benders ) ) ) {
   rebuild_abstract( issueMod );
   return;
   }
@@ -1430,11 +1430,14 @@ void SVMBlock::rebuild_abstract( ModParam issueMod )
    * of the hyper-parameters, hence whatever brings us here makes them stale
    * as well: they are dealt out anew, keeping the structure that was asked
    * for. This is done between the destruction of the abstract representation
-   * and its regeneration, the structure coming first. */
-  if( oAR & Consensus ) {
+   * and its regeneration, the structure coming first. Those of the Benders
+   * one hold nothing of their own, but the samples they are dealt is data
+   * all the same. */
+  if( oAR & ( Consensus | Benders ) ) {
    const Index P = f_P;
+   const int type = f_structure;
    f_P = 1;
-   guts_of_set_structure( P );
+   guts_of_set_structure( type , P );
    }
 
   /* The same parts of the same formulation are generated anew: which one it
@@ -1609,53 +1612,43 @@ void SVMBlock::set_structure( Configuration * strc )
  if( ! strc )  // nobody is choosing: the structure is left as it is
   return;
 
- auto c = dynamic_cast< SimpleConfiguration< int > * >( strc );
- if( ! c )
-  throw( std::invalid_argument( _prfx + "the structure of a SVMBlock is a "
-                                "SimpleConfiguration< int >, the number of "
-                                "chunks" ) );
+ /* The structure says two things, which decomposition and in how many
+  * chunks: a plain int is the number of chunks of the consensus one, which
+  * is what it meant when that was the only structure there was. */
 
- if( c->value() < 1 )
+ int type = kConsensus;
+ int P = 0;
+
+ if( auto ci = dynamic_cast< SimpleConfiguration< int > * >( strc ) )
+  P = ci->value();
+ else
+  if( auto cp = dynamic_cast<
+       SimpleConfiguration< std::pair< int , int > > * >( strc ) ) {
+   type = cp->value().first;
+   P = cp->value().second;
+   }
+  else
+   throw( std::invalid_argument( _prfx + "the structure of a SVMBlock is a "
+                                 "SimpleConfiguration< std::pair< int , int "
+                                 "> >, the decomposition and the number of "
+                                 "chunks, or a SimpleConfiguration< int >, "
+                                 "the number of chunks of the consensus "
+                                 "one" ) );
+
+ if( P < 1 )
   throw( std::invalid_argument( _prfx + "the chunks must be at least one" ) );
 
- guts_of_set_structure( c->value() );
+ if( ( type != kConsensus ) && ( type != kBenders ) )
+  throw( std::invalid_argument( _prfx + "unknown decomposition" ) );
+
+ guts_of_set_structure( type , Index( P ) );
 
  }  // end( SVMBlock::set_structure )
 
 /*--------------------------------------------------------------------------*/
 
-void SVMBlock::guts_of_set_structure( Index P )
+void SVMBlock::deal_out_samples( Index P )
 {
- static const std::string _prfx = "SVMBlock::set_structure: ";
-
- if( P == f_P )   // the structure being asked for is the one there is
-  return;         // nothing to do
-
- if( AR & HasVar )
-  throw( std::logic_error( _prfx + "the abstract representation has been "
-                           "generated already, hence the structure can no "
-                           "longer be changed" ) );
-
- for( auto sub : v_Block )   // the sub-Block are the wrong ones
-  delete sub;
- v_Block.clear();
-
- f_P = P;
- AR &= ~Consensus;
-
- if( f_P == 1 )   // no structure at all, the training problem is one Block
-  return;
-
- check_data();
-
- if( f_kernel != kLinear )
-  throw( std::invalid_argument( _prfx + "only the linear kernel has the "
-                                "explicit feature map the primal of a chunk "
-                                "needs" ) );
-
- if( f_P > f_n )
-  throw( std::invalid_argument( _prfx + "more chunks than samples" ) );
-
  /* The samples are dealt out to the chunks round-robin after having been
   * sorted by target, so that consecutive samples in the order end up in
   * different chunks: for a classification problem this means that each chunk
@@ -1671,9 +1664,83 @@ void SVMBlock::guts_of_set_structure( Index P )
                     return( y[ i ] < y[ j ] );
                     } );
 
- std::vector< std::vector< Index > > chunk( f_P );
+ v_chunk.assign( P , Subset() );
  for( Index t = 0 ; t < f_n ; ++t )
-  chunk[ t % f_P ].push_back( order[ t ] );
+  v_chunk[ t % P ].push_back( order[ t ] );
+
+ }  // end( SVMBlock::deal_out_samples )
+
+/*--------------------------------------------------------------------------*/
+
+SVMBlock::Subset SVMBlock::chunk_dual( Index p ) const
+{
+ // the chunk of each sample, so that the dual indices follow the sample
+ // they refer to
+ Subset smap( f_n , 0 );
+ for( Index q = 0 ; q < v_chunk.size() ; ++q )
+  for( auto i : v_chunk[ q ] )
+   smap[ i ] = q;
+
+ Subset dk;
+ for( Index k = 0 ; k < get_NDual() ; ++k )
+  if( smap[ v_di[ k ] ] == p )
+   dk.push_back( k );
+
+ return( dk );
+
+ }  // end( SVMBlock::chunk_dual )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::guts_of_set_structure( int type , Index P )
+{
+ static const std::string _prfx = "SVMBlock::set_structure: ";
+
+ if( ( P == f_P ) && ( ( P == 1 ) || ( type == f_structure ) ) )
+  return;         // the structure being asked for is the one there is
+
+ if( AR & HasVar )
+  throw( std::logic_error( _prfx + "the abstract representation has been "
+                           "generated already, hence the structure can no "
+                           "longer be changed" ) );
+
+ for( auto sub : v_Block )   // the sub-Block are the wrong ones
+  delete sub;
+ v_Block.clear();
+ v_chunk.clear();
+
+ f_P = P;
+ f_structure = type;
+ AR &= ~( Consensus | Benders );
+
+ if( f_P == 1 )   // no structure at all, the training problem is one Block
+  return;
+
+ check_data();
+
+ if( f_kernel != kLinear )
+  throw( std::invalid_argument( _prfx + "only the linear kernel has the "
+                                "explicit feature map the primal of a chunk "
+                                "needs" ) );
+
+ if( f_P > f_n )
+  throw( std::invalid_argument( _prfx + "more chunks than samples" ) );
+
+ deal_out_samples( f_P );
+
+ if( f_structure == kBenders ) {
+  /* Each chunk holds the slacks of its own samples, their margin Constraint
+   * and its share of the loss: all of it is abstract, the data staying in
+   * the SVMBlock, hence the sub-Block are built empty here and filled in
+   * when the abstract representation is generated. They are ordinary Block,
+   * a loss with no model of its own being no SVM training problem. */
+
+  for( Index p = 0 ; p < f_P ; ++p )
+   add_nested_Block( new AbstractBlock( this ) );
+
+  AR |= Benders;
+  return;
+  }
 
  // one sub-Block per chunk - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -1690,14 +1757,14 @@ void SVMBlock::guts_of_set_structure( Index P )
    * convex, hence bounded, whatever the multipliers. */
   sub->set_reg_weight( 1 / double( f_P ) );
 
-  doubleVec X( chunk[ p ].size() * f_m ) , yp( chunk[ p ].size() );
+  doubleVec X( v_chunk[ p ].size() * f_m ) , yp( v_chunk[ p ].size() );
 
-  for( Index t = 0 ; t < chunk[ p ].size() ; ++t ) {
-   std::copy_n( get_x( chunk[ p ][ t ] ) , f_m , X.begin() + t * f_m );
-   yp[ t ] = v_y[ chunk[ p ][ t ] ];
+  for( Index t = 0 ; t < v_chunk[ p ].size() ; ++t ) {
+   std::copy_n( get_x( v_chunk[ p ][ t ] ) , f_m , X.begin() + t * f_m );
+   yp[ t ] = v_y[ v_chunk[ p ][ t ] ];
    }
 
-  sub->load( chunk[ p ].size() , f_m , std::move( X ) , std::move( yp ) );
+  sub->load( v_chunk[ p ].size() , f_m , std::move( X ) , std::move( yp ) );
 
   /* A chunk whose dual signs are all equal has an unbounded Lagrangian
    * subproblem in its bias, since the latter then only appears linearly and
@@ -1745,6 +1812,33 @@ void SVMBlock::generate_abstract_variables( Configuration * stvv )
   SimpleConfiguration< int > primal( kPrimal );
   for( auto sub : v_Block )
    sub->generate_abstract_variables( & primal );
+
+  AR |= HasVar;
+  return;
+  }
+
+ if( AR & Benders ) {
+  /* With the Benders structure the SVMBlock is the master, hence it has the
+   * model and nothing else, while the slacks of each chunk live in the
+   * chunk: the formulation is necessarily the primal, whatever the
+   * Configuration says. */
+  AR |= PrimalF;
+
+  v_w.resize( f_m );
+  for( auto & wj : v_w )
+   wj.set_type( ColVariable::kContinuous );
+  add_static_variable( v_w , "w" );
+
+  f_b_var.set_type( ColVariable::kContinuous );
+  add_static_variable( f_b_var , "b" );
+
+  for( Index p = 0 ; p < f_P ; ++p ) {
+   auto sub = static_cast< AbstractBlock * >( v_Block[ p ] );
+   auto xi = new std::list< ColVariable >( chunk_dual( p ).size() );
+   for( auto & xk : *xi )
+    xk.set_type( ColVariable::kContinuous );
+   sub->add_dynamic_variable( *xi , "xi" );
+   }
 
   AR |= HasVar;
   return;
@@ -1859,6 +1953,53 @@ void SVMBlock::generate_abstract_constraints( Configuration * stcc )
   return;
   }
 
+ if( AR & Benders ) {
+  /* The Constraint of the master are none: the model is free, and everything
+   * that binds it is the margin Constraint of the chunks, one per dual
+   * index, which are what the model enters and therefore what makes each
+   * chunk a value function of it. */
+
+  for( Index p = 0 ; p < f_P ; ++p ) {
+   auto sub = static_cast< AbstractBlock * >( v_Block[ p ] );
+   const auto dk = chunk_dual( p );
+
+   auto xi = sub->get_dynamic_variable< ColVariable >( "xi" );
+
+   auto xbox = new std::list< LB0Constraint >( dk.size() );
+   { auto xk = xi->begin();
+     for( auto & bk : *xbox )
+      bk.set_variable( &(*(xk++)) );
+     }
+   sub->add_dynamic_constraint( *xbox , "xibox" );
+
+   // s_k ( < w , x_{ i( k ) } > + b ) + xi_k >= r_k
+   auto cons = new std::list< FRowConstraint >( dk.size() );
+   { auto xk = xi->begin();
+     Index t = 0;
+     for( auto & ck : *cons ) {
+      const Index k = dk[ t++ ];
+      const double sk = v_ds[ k ];
+      const double * xi_k = get_x( v_di[ k ] );
+
+      v_coeff_pair coeffs( f_m + 2 );
+      for( Index j = 0 ; j < f_m ; ++j )
+       coeffs[ j ] = std::make_pair( & v_w[ j ] , sk * xi_k[ j ] );
+
+      coeffs[ f_m ] = std::make_pair( & f_b_var , sk );
+      coeffs[ f_m + 1 ] = std::make_pair( &(*(xk++)) , double( 1 ) );
+
+      ck.set_lhs( - v_dq[ k ] );
+      ck.set_rhs( Inf< RowConstraint::RHSValue >() );
+      ck.set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
+      }
+     }
+   sub->add_dynamic_constraint( *cons , "cons" );
+   }
+
+  AR |= HasCns;
+  return;
+  }
+
  const Index N = get_NDual();
 
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
@@ -1954,6 +2095,49 @@ void SVMBlock::generate_objective( Configuration * objc )
   f_obj.set_function( new LinearFunction() );
   f_obj.set_sense( Objective::eMin , eNoMod );
   set_objective( & f_obj , eNoMod );
+
+  AR |= HasObj;
+  return;
+  }
+
+ if( AR & Benders ) {
+  /* The Objective of the master is the regularisation term alone, the loss
+   * of each chunk being the Objective of the chunk: the sum over the tree is
+   * the training problem, and projecting the slacks out of each chunk turns
+   * its Objective into the value function of the model. */
+
+  const double rw = f_reg_weight / 2;
+
+  v_coeff_triple triples( f_m + 1 );
+
+  for( Index j = 0 ; j < f_m ; ++j )
+   triples[ j ] = std::make_tuple( & v_w[ j ] ,
+                                   v_lambda.empty() ? double( 0 )
+                                                    : v_lambda[ j ] , rw );
+
+  triples[ f_m ] = std::make_tuple( & f_b_var , f_mu ,
+                                    f_reg_bias ? rw : double( 0 ) );
+
+  f_obj.set_function( new DQuadFunction( std::move( triples ) , 0 ) ,
+                      eNoMod );
+  f_obj.set_sense( Objective::eMin , eNoMod );
+  set_objective( & f_obj , eNoMod );
+
+  for( Index p = 0 ; p < f_P ; ++p ) {
+   auto sub = static_cast< AbstractBlock * >( v_Block[ p ] );
+   auto xi = sub->get_dynamic_variable< ColVariable >( "xi" );
+
+   v_coeff_triple ct;
+   ct.reserve( xi->size() );
+   for( auto & xk : *xi )
+    ct.push_back( std::make_tuple( &xk , f_squared_loss ? double( 0 ) : f_C ,
+                                   f_squared_loss ? f_C : double( 0 ) ) );
+
+   auto obj = new FRealObjective( sub ,
+                                  new DQuadFunction( std::move( ct ) , 0 ) );
+   obj->set_sense( Objective::eMin , eNoMod );
+   sub->set_objective( obj , eNoMod );
+   }
 
   AR |= HasObj;
   return;
@@ -2187,20 +2371,38 @@ void SVMBlock::set_solution_in_abstract( void )
 
  f_b_var.set_value( f_training_Results->f_b );
 
- // the slacks are the smallest values that make the model feasible, which is
- // what they are worth at any optimal solution of the primal
+ /* The slacks are the smallest values that make the model feasible, which is
+  * what they are worth at any optimal solution of the primal. They are the
+  * ones of the SVMBlock, or those of each chunk if the structure is the
+  * Benders one, in which case the master has none of its own. */
+
+ auto slack = [ & ]( Index k ) {
+  const double * xi = get_x( v_di[ k ] );
+
+  double f = f_training_Results->f_b;
+  for( Index j = 0 ; j < f_m ; ++j )
+   f += w[ j ] * xi[ j ];
+
+  return( std::max( double( 0 ) , - v_dq[ k ] - v_ds[ k ] * f ) );
+  };
+
+ if( AR & Benders ) {
+  for( Index p = 0 ; p < f_P ; ++p ) {
+   auto sub = static_cast< AbstractBlock * >( v_Block[ p ] );
+   auto xi = sub->get_dynamic_variable< ColVariable >( "xi" );
+   const auto dk = chunk_dual( p );
+
+   Index t = 0;
+   for( auto & xk : *xi )
+    xk.set_value( slack( dk[ t++ ] ) );
+   }
+
+  return;
+  }
+
  { Index k = 0;
-   for( auto & xk : v_xi ) {
-    const double * xi = get_x( v_di[ k ] );
-
-    double f = f_training_Results->f_b;
-    for( Index j = 0 ; j < f_m ; ++j )
-     f += w[ j ] * xi[ j ];
-
-    xk.set_value( std::max( double( 0 ) ,
-                            - v_dq[ k ] - v_ds[ k ] * f ) );
-    ++k;
-    }
+   for( auto & xk : v_xi )
+    xk.set_value( slack( k++ ) );
    }
 
  }  // end( SVMBlock::set_solution_in_abstract )
@@ -2430,11 +2632,22 @@ void SVMBlock::delete_abstract( void )
 
  f_obj.clear();
 
- // with the consensus structure the abstract representation is that of the
- // chunks, plus the constraints tying them: the chunks are *not* destroyed,
- // being the structure and not the formulation
- for( auto sub : v_Block )
-  static_cast< SVMBlock * >( sub )->delete_abstract();
+ /* With the consensus structure the abstract representation is that of the
+  * chunks, plus the constraints tying them: the chunks are *not* destroyed,
+  * being the structure and not the formulation. With the Benders one the
+  * chunks hold nothing but the abstract representation, hence emptying them
+  * means building them anew. */
+ if( AR & Benders ) {
+  for( auto sub : v_Block )
+   delete sub;
+  v_Block.clear();
+
+  for( Index p = 0 ; p < f_P ; ++p )
+   add_nested_Block( new AbstractBlock( this ) );
+  }
+ else
+  for( auto sub : v_Block )
+   static_cast< SVMBlock * >( sub )->delete_abstract();
 
  v_link.clear();
 

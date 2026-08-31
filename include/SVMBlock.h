@@ -237,6 +237,18 @@ class SVMBlock : public Block
   };
 
 /*--------------------------------------------------------------------------*/
+ /// the decompositions the training problem can be given the structure of
+ /** The training problem is a sum over the samples of a loss, plus one
+  * regularisation term: it can therefore be split along the samples in two
+  * dual ways, and which one the SVMBlock is given is what set_structure()
+  * says. Both take an explicit feature map, hence the linear kernel. */
+
+ enum structure_type {
+  kConsensus = 0 ,  ///< one copy of the model per chunk, tied by constraints
+  kBenders = 1      ///< one model in the father, one loss per chunk
+  };
+
+/*--------------------------------------------------------------------------*/
  /// the conventional values of gamma that are computed out of the data
  /** Any \f$ \gamma > 0 \f$ is used as it is; the two nonpositive values below
   * rather ask for \f$ \gamma \f$ to be derived from the data set, which is
@@ -358,13 +370,23 @@ class SVMBlock : public Block
 
 /*--------------------------------------------------------------------------*/
  /// chooses the structure of the SVMBlock, i.e., whether it has sub-Block
- /** Chooses the structure of the SVMBlock out of the SimpleConfiguration<
-  * int > \p strc, whose value P is the number of *chunks* the samples are
-  * dealt out to; if \p strc is nullptr the one of the BlockConfig is used,
-  * and if that is nullptr too nothing is done. P == 1, the default, is the
-  * training problem as one Block, with no sub-Block at all.
+ /** Chooses the structure of the SVMBlock out of \p strc, which says two
+  * things: *which* decomposition, a structure_type value, and in how many
+  * *chunks* the samples are dealt out. It is therefore a
+  * SimpleConfiguration< std::pair< int , int > >, the pair being (type, P);
+  * a SimpleConfiguration< int > is taken as (kConsensus, P), which is what
+  * the SVMBlock had when the consensus was the only structure it knew. If
+  * \p strc is nullptr the one of the BlockConfig is used, and if that is
+  * nullptr too nothing is done. P == 1, the default, is the training problem
+  * as one Block, with no sub-Block at all, whatever the type.
   *
-  * With P > 1 the SVMBlock rather has P sub-SVMBlock, one per chunk, each
+  * The training problem is a sum over the samples of a loss plus one
+  * regularisation term, and both structures split it along the samples: they
+  * are the two dual ways of doing so, so the same instance can be attacked
+  * from either side and the optimal value is of course the same.
+  *
+  * With kConsensus and P > 1 the SVMBlock has P sub-SVMBlock, one per chunk,
+  * each
   * holding the training problem of its own samples with its own copy
   * \f$ ( w_p , b_p ) \f$ of the model and an even share of the
   * regularisation term, and the copies are tied together by the *consensus*
@@ -399,6 +421,31 @@ class SVMBlock : public Block
   * solution satisfying the consensus constraints, hence it is read out of any
   * of them [see get_solution_from_abstract()].
   *
+  * With kBenders and P > 1 the split is the other one: the model
+  * \f$ ( w , b ) \f$ and the regularisation term stay in the SVMBlock,
+  * which is then the *master*, and each chunk is a sub-Block holding the
+  * slacks of its own samples, their margin Constraint and its share
+  * \f$ C \sum_{ k \in p } \xi_k^{ \, \cdot } \f$ of the loss. The model
+  * enters the Constraint of a chunk, and nothing else does, so projecting the
+  * slacks out leaves the value function
+  * \f[
+  *   v_p( w , b ) = \min \{ \; C \sum_{ k \in p } \xi_k^{ \, \cdot }
+  *     \; : \; s_k ( \langle w , x_{ i( k ) } \rangle + b ) + \xi_k
+  *     \geq r_k \; , \; \xi \geq 0 \; \}
+  * \f]
+  * i.e., the loss of the chunk at that model, and the training problem
+  * becomes the minimisation of the regularisation term plus the sum of the
+  * \f$ v_p \f$: precisely the structure a generic Benders Solver expects,
+  * the model being the "complicating" Variable and each chunk an independent
+  * linear program in its own slacks. The chunks are ordinary Block, not
+  * SVMBlock, a loss with no model of its own being no SVM training problem.
+  *
+  * Note that the two structures put the very same partition of the samples
+  * to two opposite uses: with kConsensus a chunk holds a whole SVM and the
+  * copies of the model are what has to be reconciled, with kBenders a chunk
+  * holds no model at all and the loss is what has to be approximated. This
+  * is what makes the two directly comparable on the same instance.
+  *
   * The structure can be changed as long as the abstract representation has
   * not been generated, the sub-Block being thrown away and built anew; after
   * that it throws exception, as the Constraint and the Objective would no
@@ -407,9 +454,26 @@ class SVMBlock : public Block
  void set_structure( Configuration * strc = nullptr ) override;
 
 /*--------------------------------------------------------------------------*/
- /// returns the number of chunks of the consensus structure, 1 if there is no
+ /// returns the number of chunks the samples are dealt out to, 1 if none
 
  Index get_NChunks( void ) const { return( f_P ); }
+
+/*--------------------------------------------------------------------------*/
+ /// returns which decomposition the structure is, a structure_type value
+
+ int get_structure_type( void ) const { return( f_structure ); }
+
+/*--------------------------------------------------------------------------*/
+ /// returns the samples dealt out to chunk \p p, empty if there is no chunk
+ /** Returns the indices of the samples that the structure deals out to chunk
+  * \p p [see set_structure()]: the partition is the same whichever
+  * decomposition the structure is, which is what makes the two comparable on
+  * the very same instance. */
+
+ const Subset & get_chunk( Index p ) const {
+  static const Subset empty;
+  return( p < v_chunk.size() ? v_chunk[ p ] : empty );
+  }
 
 /*--------------------------------------------------------------------------*/
  /// generates the abstract Variable of the SVMBlock
@@ -1124,7 +1188,21 @@ class SVMBlock : public Block
 /*--------------------------------------------------------------------------*/
  /// builds, or destroys, the \p P chunks the consensus structure is made of
 
- void guts_of_set_structure( Index P );
+ void guts_of_set_structure( int type , Index P );
+
+/*--------------------------------------------------------------------------*/
+ /// deals the samples out to the \p P chunks, filling v_chunk
+
+ void deal_out_samples( Index P );
+
+/*--------------------------------------------------------------------------*/
+ /// the dual indices of the samples dealt out to chunk \p p
+ /** Returns the dual indices of the samples that v_chunk deals out to chunk
+  * \p p, in increasing order: a sample contributes all of its dual indices to
+  * the same chunk, since they are the two sides of the same insensitivity
+  * tube and there is nothing to be gained by splitting them. */
+
+ Subset chunk_dual( Index p ) const;
 
 /*--------------------------------------------------------------------------*/
  /// extends the abstract representation with \p kk new dual indices
@@ -1218,6 +1296,11 @@ class SVMBlock : public Block
 
  Index f_P = 1;              ///< the number of chunks, 1 = no sub-Block
 
+ int f_structure = kConsensus;  ///< which decomposition the structure is
+
+ std::vector< Subset > v_chunk;
+ ///< the dual indices dealt out to each chunk, empty if there is no structure
+
  std::vector< FRowConstraint > v_link;  ///< the consensus constraints
 
  // the abstract representation - - - - - - - - - - - - - - - - - - - - - - -
@@ -1251,6 +1334,11 @@ class SVMBlock : public Block
  static constexpr unsigned char PrimalF = 8;
  ///< fourth bit of AR == 1 if the encoded problem is the primal one
  static constexpr unsigned char Consensus = 16;
+
+/*--------------------------------------------------------------------------*/
+ /// the abstract representation is that of the Benders structure
+
+ static constexpr unsigned char Benders = 32;
  ///< fifth bit of AR == 1 if the structure is the consensus one
 
 /*--------------------------------------------------------------------------*/

@@ -1062,6 +1062,113 @@ int main( int argc , char ** argv )
   check( caught , "a nonlinear kernel is refused" );
   }
 
+ // the Benders structure - - - - - - - - - - - - - - - - - - - - - - - - - -
+ //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+ /* The other way of splitting the very same sum along the samples: the model
+  * and the regularisation term stay in the SVMBlock, which is the master,
+  * and each chunk holds the slacks of its samples and its share of the loss.
+  * Projecting the slacks out of a chunk leaves the loss of that chunk at the
+  * model, which is what a Benders Solver approximates from below. */
+
+ std::cout << "Benders structure" << std::endl;
+ {
+  const Index n = 48 , m = 3 , P = 4;
+
+  doubleVec X , y;
+  make_svc_data( n , m , X , y , 5 );
+
+  // the reference: the same problem written as one Block
+  SVCBlock ref;
+  ref.set_kernel( SVMBlock::kLinear );
+  ref.set_C( 3 );
+  ref.load( n , m , X , y );
+
+  const double value = train( & ref );
+  const auto w = ref.get_w();
+  const double b = ref.get_b();
+
+  SVCBlock ben;
+  ben.set_kernel( SVMBlock::kLinear );
+  ben.set_C( 3 );
+  ben.load( n , m , X , y );
+
+  // the structure says two things, the decomposition and the chunks
+  SimpleConfiguration< std::pair< int , int > > bcfg(
+   std::make_pair( int( SVMBlock::kBenders ) , int( P ) ) );
+  ben.set_structure( & bcfg );
+
+  ben.generate_abstract_variables();
+  ben.generate_abstract_constraints();
+  ben.generate_objective();
+
+  check( ben.get_structure_type() == SVMBlock::kBenders ,
+         "the SVMBlock says which decomposition it is" );
+  check( ben.get_number_nested_Blocks() == P , "one sub-Block per chunk" );
+
+  // the master has the model, and only that
+  check( ben.get_static_variable_v< ColVariable >( "w" ) &&
+         ben.get_static_variable< ColVariable >( "b" ) &&
+         ( ! ben.get_dynamic_variable< ColVariable >( "xi" ) ) &&
+         ( ! ben.get_dynamic_variable< ColVariable >( "alpha" ) ) ,
+         "the master has the model and no slack" );
+
+  check( ben.get_static_constraints().empty() &&
+         ben.get_dynamic_constraints().empty() ,
+         "the master has no Constraint, the model being free" );
+
+  // every dual index is in exactly one chunk, with its slack and its margin
+  Index tot = 0;
+  bool right = true;
+  for( Index p = 0 ; p < P ; ++p ) {
+   auto sub = ben.get_nested_Block( p );
+   auto xi = sub->get_dynamic_variable< ColVariable >( "xi" );
+   auto cn = sub->get_dynamic_constraint< FRowConstraint >( "cons" );
+   auto xb = sub->get_dynamic_constraint< LB0Constraint >( "xibox" );
+
+   if( ( ! xi ) || ( ! cn ) || ( ! xb ) ||
+       ( xi->size() != cn->size() ) || ( xi->size() != xb->size() ) )
+    right = false;
+   else
+    tot += xi->size();
+   }
+
+  check( right , "each chunk has its slacks, their bounds and their margins" );
+  check( tot == ben.get_NDual() , "the chunks partition the dual indices" );
+
+  /* The decomposition is exact: at the optimum of the problem written as one
+   * Block, the Objective of the master, i.e. the regularisation term, plus
+   * the Objective of the chunks, i.e. the loss of their samples, add up to
+   * its value. */
+
+  ben.set_primal_solution( doubleVec( w ) , b );
+  ben.set_solution_in_abstract();
+
+  double sum = objective_value( & ben );
+  for( Index p = 0 ; p < P ; ++p )
+   sum += objective_value( ben.get_nested_Block( p ) );
+
+  check_close( sum , value , 1e-8 , "the Benders structure is exact" );
+
+  // and the model is read out of the master, which is where it lives
+  ben.get_solution_from_abstract();
+  double dw = std::abs( ben.get_b() - b );
+  auto w2 = ben.get_w();
+  for( Index j = 0 ; j < m ; ++j )
+   dw = std::max( dw , std::abs( w2[ j ] - w[ j ] ) );
+  check( dw < 1e-12 , "the model is read out of the master" );
+
+  // the plain SimpleConfiguration< int > is still the consensus one
+  SVCBlock cns;
+  cns.set_kernel( SVMBlock::kLinear );
+  cns.set_C( 3 );
+  cns.load( n , m , X , y );
+  SimpleConfiguration< int > four( P );
+  cns.set_structure( & four );
+  check( ( cns.get_structure_type() == SVMBlock::kConsensus ) &&
+         ( cns.get_NChunks() == P ) ,
+         "a plain int is the consensus structure" );
+  }
+
  // changing the training problem- - - - - - - - - - - - - - - - - - - - - - -
 
  std::cout << "re-optimization" << std::endl;
