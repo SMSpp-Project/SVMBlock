@@ -319,6 +319,13 @@ class SMOSolver : public Solver
 
  Index get_iter( void ) const { return( f_iter ); }
 
+/*--------------------------------------------------------------------------*/
+ /// the iterations of the last call to compute(), for whoever asks generically
+
+ [[nodiscard]] long get_elapsed_iterations( void ) const override {
+  return( long( f_iter ) );
+  }
+
 /*---------------------- PROTECTED PART OF THE CLASS -----------------------*/
 
  protected:
