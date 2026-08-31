@@ -373,6 +373,11 @@ class SMOSolver : public Solver
  bool resync( void );
 
 /*--------------------------------------------------------------------------*/
+ /// fills the cached diagonal of the Hessian of the dual
+
+ void fill_diagonal( void );
+
+/*--------------------------------------------------------------------------*/
  /// makes the multipliers satisfy the equality constraint again
  /** Moves the multipliers so that s^T alpha is the right-hand side of the
   * equality constraint, updating the gradient accordingly, and returns true
@@ -420,6 +425,8 @@ class SMOSolver : public Solver
 
  doubleVec v_alpha;            ///< the current multipliers
  doubleVec v_G;                ///< the gradient of the dual at them
+
+ doubleVec v_QD;               ///< the diagonal of the Hessian of the dual
 
  // the data of the dual, cached out of the SVMBlock- - - - - - - - - - - - -
 

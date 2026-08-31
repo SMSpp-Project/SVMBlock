@@ -333,6 +333,8 @@ void SMOSolver::reload( void )
  v_alpha.assign( f_N , 0 );
  v_G = v_q;
 
+ fill_diagonal();
+
  }  // end( SMOSolver::reload )
 
 /*--------------------------------------------------------------------------*/
@@ -527,6 +529,8 @@ bool SMOSolver::resync( void )
   f_d = d;
   }
 
+ fill_diagonal();   // it depends on all of the above
+
  return( true );
 
  }  // end( SMOSolver::resync )
@@ -596,6 +600,24 @@ bool SMOSolver::restore_equality( void )
 
 /*--------------------------------------------------------------------------*/
 
+void SMOSolver::fill_diagonal( void )
+{
+ /* The diagonal of the Hessian of the dual, which the selection of the
+  * working set reads once per candidate: taking it out of the Gram matrix
+  * every time would walk it with stride n + 1, i.e. one cache miss per
+  * candidate, which is what makes the second order selection expensive. */
+
+ v_QD.resize( f_N );
+
+ for( Index k = 0 ; k < f_N ; ++k ) {
+  const std::size_t ik = std::size_t( f_di[ k ] );
+  v_QD[ k ] = ( f_K[ ik * f_n + ik ] + f_rb ) / f_rw + f_d;
+  }
+
+ }  // end( SMOSolver::fill_diagonal )
+
+/*--------------------------------------------------------------------------*/
+
 int SMOSolver::solve_with_equality( void )
 {
  /* The optimality conditions of the dual are
@@ -605,56 +627,103 @@ int SMOSolver::solve_with_equality( void )
   * with g_k = - s_k G_k, where I_up (I_low) is the set of the multipliers
   * that can be increased (decreased) along the sign s_k without violating
   * their bounds, i.e., the ones that can be moved in a direction that keeps
-  * s^T alpha = 0. The common value of the two sides at optimality is the
-  * multiplier of the equality constraint, i.e., the bias of the model. */
+  * s^T alpha where it is. The common value of the two sides at optimality is
+  * the multiplier of the equality constraint, i.e., the bias of the model.
+  *
+  * The pair that is moved is selected with *second order* information: the
+  * first of the two is the maximal violating index, as the pair of Platt is,
+  * but the second one is the index that gives the largest decrease of the
+  * objective, i.e.,
+  *
+  *   max { ( g_i - g_k )^2 / a_ik : k in I_low , g_k < g_i }
+  *
+  * with a_ik the curvature along the direction, rather than the minimal
+  * violating one. The two coincide only if the curvature is the same in
+  * every direction, and the difference is worth the O( N ) it costs, which
+  * is what the maximal violating pair costs anyway.
+  *
+  * Every so often the multipliers that are at a bound and cannot be selected
+  * are taken out of the active set [see shrink()], so that the iterations,
+  * which cost O( | A | ), become cheaper as the solution settles; when the
+  * conditions hold on the active set they are checked on the whole of it
+  * [see unshrink()], and the algorithm only stops if they hold there too. */
 
  while( ( f_max_iter < 0 ) || ( f_iter < Index( f_max_iter ) ) ) {
 
-  // select the maximal violating pair - - - - - - - - - - - - - - - - - - -
+  // select the first index of the pair: the maximal violating one - - - - -
 
-  Index i = f_N , j = f_N;
-  double m = - Inf< double >() , M = Inf< double >();
+  Index i = f_N;
+  double m = - Inf< double >();
 
   for( Index k = 0 ; k < f_N ; ++k ) {
    const double sk = f_ds[ k ];
-   const double ak = v_alpha[ k ];
    const double gk = - sk * v_G[ k ];
-
-   const bool up = ( sk > 0 ) ? ( ak < f_u ) : ( ak > 0 );
-   const bool low = ( sk > 0 ) ? ( ak > 0 ) : ( ak < f_u );
+   const bool up = ( sk > 0 ) ? ( v_alpha[ k ] < f_u ) : ( v_alpha[ k ] > 0 );
 
    if( up && ( gk > m ) ) { m = gk; i = k; }
-   if( low && ( gk < M ) ) { M = gk; j = k; }
    }
 
-  if( ( i == f_N ) || ( j == f_N ) )  // no feasible direction exists at all
-   return( kOK );                     // hence the point is optimal
+  /* Select the second one: the index of I_low that gives the largest
+   * decrease among those that make a violating pair with the first. The
+   * minimal violating index is computed along the way, since it is what the
+   * optimality conditions are stated in terms of. */
+
+  Index j = f_N;
+  double M = Inf< double >() , best = 0;
+
+  const double * Ki = ( i < f_N ) ? f_K + std::size_t( f_di[ i ] ) * f_n
+                                  : nullptr;
+  const double Qii = Ki ? v_QD[ i ] : 0;
+
+  for( Index k = 0 ; k < f_N ; ++k ) {
+   const double sk = f_ds[ k ];
+   const double gk = - sk * v_G[ k ];
+   const bool low = ( sk > 0 ) ? ( v_alpha[ k ] > 0 ) : ( v_alpha[ k ] < f_u );
+
+   if( ! low )
+    continue;
+
+   if( gk < M )
+    M = gk;
+
+   if( ( ! Ki ) || ( gk >= m ) )   // not a violating pair with i
+    continue;
+
+   /* The curvature along the direction that moves the two multipliers is
+    * K_ii + K_kk - 2 K_ik over the weight of the regularisation term, plus
+    * twice the diagonal of the squared loss: the signs cancel out, the
+    * direction being the one that keeps s^T alpha where it is. A nonpositive
+    * value means that the kernel does not obey Mercer's condition, in which
+    * case a tiny curvature is substituted, which sends the step to the
+    * farthest reachable end of the segment. */
+
+   double a = Qii + v_QD[ k ] - 2 * ( Ki[ f_di[ k ] ] + f_rb ) / f_rw;
+   if( a <= 0 )
+    a = dTau;
+
+   const double b = m - gk;
+   const double dec = ( b * b ) / a;
+
+   if( dec > best ) { best = dec; j = k; }
+   }
 
   // at optimality the two sides coincide with the multiplier of the equality
   // constraint, i.e., with the bias; in general it is any value in between
-  f_b = ( m + M ) / 2;
+  if( ( i < f_N ) && ( M < Inf< double >() ) )
+   f_b = ( m + M ) / 2;
 
-  if( m - M <= f_tol )  // the optimality conditions hold
-   return( kOK );
+  if( ( i == f_N ) || ( j == f_N ) || ( m - M <= f_tol ) )
+   return( kOK );  // the optimality conditions hold
 
   // minimize along the only feasible direction changing alpha_i, alpha_j - -
 
   const double si = f_ds[ i ] , sj = f_ds[ j ];
 
-  // the curvature along the direction, which for the plain classification
-  // dual is K_ii + K_jj - 2 K_ij
-  double a = Q( i , i ) + Q( j , j ) - 2 * si * sj * Q( i , j );
-
-  /* A nonpositive curvature means that the kernel does not obey Mercer's
-   * condition, in which case the objective is concave along the direction and
-   * its minimum over the segment is at one of the two ends. Since the pair is
-   * selected so that the derivative at t = 0 is negative, that end is the
-   * farthest reachable one, which is what substituting a tiny curvature
-   * yields. */
+  double a = Qii + v_QD[ j ] - 2 * ( Ki[ f_di[ j ] ] + f_rb ) / f_rw;
   if( a <= 0 )
    a = dTau;
 
-  double t = ( m - M ) / a;  // the unconstrained minimizer along t
+  double t = ( m + sj * v_G[ j ] ) / a;  // ( g_i - g_j ) / a
 
   // clip t so that both multipliers stay within their bounds
   const double ti = ( si > 0 ) ? f_u - v_alpha[ i ] : v_alpha[ i ];
@@ -680,12 +749,13 @@ int SMOSolver::solve_with_equality( void )
 
   // update the gradient - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-  const double * Ki = f_K + std::size_t( f_di[ i ] ) * f_n;
   const double * Kj = f_K + std::size_t( f_di[ j ] ) * f_n;
 
   /* The Hessian is the reweighted Gram matrix divided by the weight of the
    * regularisation term [see Q()], which is read here directly rather than
-   * through it: this is the innermost loop of the algorithm. */
+   * through it: this is the innermost loop of the algorithm, and it only
+   * runs over the active set, the gradient of what is out being recomputed
+   * when it comes back in. */
   const double di = si * dai / f_rw , dj = sj * daj / f_rw;
 
   for( Index k = 0 ; k < f_N ; ++k )
@@ -710,13 +780,17 @@ int SMOSolver::solve_box( void )
 {
  /* Without the equality constraint the multipliers are independent, hence
   * one of them at a time is moved to the minimizer of the dual along its own
-  * coordinate. The multiplier with the largest projected gradient is chosen,
-  * and the algorithm stops when even that one is small enough. */
+  * coordinate. Which one is again chosen with second order information, i.e.
+  * as the one whose move decreases the objective the most, G_k^2 / Q_kk
+  * rather than the largest projected gradient, and the algorithm stops when
+  * even the largest violation is small enough. The multipliers that are at a
+  * bound and satisfy their own condition are shrunk away exactly as in the
+  * other case. */
 
  while( ( f_max_iter < 0 ) || ( f_iter < Index( f_max_iter ) ) ) {
 
   Index i = f_N;
-  double viol = 0;
+  double viol = 0 , best = 0;
 
   for( Index k = 0 ; k < f_N ; ++k ) {
    const double ak = v_alpha[ k ];
@@ -726,13 +800,23 @@ int SMOSolver::solve_box( void )
    else if( ( ak >= f_u ) && ( pg < 0 ) )
     pg = 0;
 
-   if( std::abs( pg ) > viol ) { viol = std::abs( pg ); i = k; }
+   if( ! pg )
+    continue;
+
+   viol = std::max( viol , std::abs( pg ) );
+
+   double a = v_QD[ k ];
+   if( a <= 0 )
+    a = dTau;
+
+   const double dec = ( pg * pg ) / a;
+   if( dec > best ) { best = dec; i = k; }
    }
 
   if( ( i == f_N ) || ( viol <= f_tol ) )  // the optimality conditions hold
    return( kOK );
 
-  double a = Q( i , i );
+  double a = v_QD[ i ];
   if( a <= 0 )
    a = dTau;
 
