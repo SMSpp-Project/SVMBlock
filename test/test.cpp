@@ -1632,7 +1632,16 @@ int main( int argc , char ** argv )
 
  // LIBSVM, when the module has been built with it - - - - - - - - - - - - -
 
- if( auto probe = Solver::new_Solver( "LIBSVMSolver" ) ) {
+ /* Solver::new_Solver() throws if the name is not in the factory, which is
+  * what happens when the module has been built without LIBSVM: this is the
+  * only way of asking whether it is there, the factory itself not being
+  * accessible from outside. */
+
+ Solver * probe = nullptr;
+ try { probe = Solver::new_Solver( "LIBSVMSolver" ); }
+ catch( const std::exception & ) {}
+
+ if( probe ) {
   delete probe;
 
   std::cout << "LIBSVMSolver" << std::endl;
