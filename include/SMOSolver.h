@@ -272,7 +272,18 @@ class SMOSolver : public Solver
  /// extends Solver::int_par_type_S with the SMOSolver parameters
 
  enum int_par_type_SMOS {
-  intSMOShrink = intLastAlgPar ,  ///< whether the active set is shrunk
+  intSMOPath = intLastAlgPar ,  ///< whether new samples are learnt exactly
+  /**< Nonzero if the samples that have been *added* to the SVMBlock since
+   * the previous call are learnt by following the exact solution path [see
+   * follow_path()] rather than by iterating from the previous solution: the
+   * path leaves the solution optimal at every step, hence when the last
+   * added sample has been learnt there is nothing left to iterate on.
+   * Defaults to 1. Note that the path is only taken when nothing else has
+   * changed and the previous call did find an optimal solution; whatever the
+   * value of this parameter, the conditions are checked and the iteration
+   * finishes the job if they do not hold. */
+
+  intSMOShrink ,  ///< whether the active set is shrunk
   /**< Nonzero if the multipliers that provably cannot be selected are taken
    * out of the active set, so that the iterations, which cost \f$ O( | A | )
    * \f$, get cheaper as the solution settles. This changes nothing in what
@@ -290,9 +301,10 @@ class SMOSolver : public Solver
   Solver::set_par( par , value );
   }
 
- /// honoured parameters: intMaxIter, intSMOShrink
+ /// honoured parameters: intMaxIter, intSMOPath, intSMOShrink
  void set_par( idx_type par , int value ) override {
   if( par == intMaxIter ) { f_max_iter = value; return; }
+  if( par == intSMOPath ) { f_path = bool( value ); return; }
   if( par == intSMOShrink ) { f_shrink = bool( value ); return; }
   Solver::set_par( par , value );
   }
@@ -304,6 +316,7 @@ class SMOSolver : public Solver
 
  [[nodiscard]] int get_int_par( idx_type par ) const override {
   if( par == intMaxIter ) return( f_max_iter );
+  if( par == intSMOPath ) return( int( f_path ) );
   if( par == intSMOShrink ) return( int( f_shrink ) );
   return( Solver::get_int_par( par ) );
   }
@@ -313,19 +326,24 @@ class SMOSolver : public Solver
   }
 
  [[nodiscard]] int get_dflt_int_par( idx_type par ) const override {
-  return( par == intSMOShrink ? 1 : Solver::get_dflt_int_par( par ) );
+  if( ( par == intSMOShrink ) || ( par == intSMOPath ) )
+   return( 1 );
+  return( Solver::get_dflt_int_par( par ) );
   }
 
  [[nodiscard]] idx_type int_par_str2idx( const std::string & name )
   const override {
-  return( name == "intSMOShrink" ? intSMOShrink
-                                 : Solver::int_par_str2idx( name ) );
+  if( name == "intSMOPath" ) return( intSMOPath );
+  if( name == "intSMOShrink" ) return( intSMOShrink );
+  return( Solver::int_par_str2idx( name ) );
   }
 
  [[nodiscard]] const std::string & int_par_idx2str( idx_type idx )
   const override {
-  static const std::string name = "intSMOShrink";
-  return( idx == intSMOShrink ? name : Solver::int_par_idx2str( idx ) );
+  static const std::string path = "intSMOPath" , shrink = "intSMOShrink";
+  if( idx == intSMOPath ) return( path );
+  if( idx == intSMOShrink ) return( shrink );
+  return( Solver::int_par_idx2str( idx ) );
   }
 
  [[nodiscard]] idx_type get_num_dbl_par( void ) const override {
@@ -351,6 +369,26 @@ class SMOSolver : public Solver
 /*--------------------- OTHER METHODS OF THE CLASS -------------------------*/
 /*--------------------------------------------------------------------------*/
 
+ /// unlearns a sample, leaving the solution optimal without it
+ /** Drives to zero the multipliers of the sample \p i keeping every other
+  * one at its own optimality condition, so that what is left is the exact
+  * solution of the training problem *without* that sample, at the cost of
+  * one walk along the solution path rather than of a training [see
+  * follow_path()]. The sample stays in the SVMBlock and nothing of it is
+  * changed: what changes is the solution this Solver holds, which becomes
+  * the one of the problem the sample does not take part in. That is what
+  * makes the leave-one-out estimate, and the k-fold that unlearns one fold
+  * at a time, cost a walk each instead of a training each.
+  *
+  * The Solver has to have a solution to start from, i.e., compute() must
+  * have been called and have found one. Returns kOK if the sample has been
+  * unlearnt and kError if the path could not be followed, in which case the
+  * multipliers are feasible but they are not the solution asked for, and a
+  * compute() puts things back in order. */
+
+ int unlearn( Index i );
+
+/*--------------------------------------------------------------------------*/
  /// returns the number of iterations of the last call to compute()
 
  Index get_iter( void ) const { return( f_iter ); }
@@ -473,6 +511,56 @@ class SMOSolver : public Solver
  void restore_order( void );
 
 /*--------------------------------------------------------------------------*/
+ /// how the free multipliers and the bias react to the multiplier of c
+ /** Solves the system that says how the multipliers of the *free* dual
+  * indices \p S and the bias have to move, per unit of movement of the
+  * multiplier of \p c, for the free indices to keep their own optimality
+  * condition and the equality constraint to keep holding:
+  * \f[
+  *    Q_{SS} \beta + s_S \beta_b = - Q_{Sc} \quad , \quad
+  *    s_S \cdot \beta = - s_c
+  * \f]
+  * The system is (|S|+1) x (|S|+1), or |S| x |S| when the bias is
+  * regularised and there is no equality constraint, and is solved by plain
+  * Gaussian elimination with partial pivoting: |S| is the number of margin
+  * support vectors, hence small, and re-solving it at each event of the path
+  * costs much less than what the rank-one updates of [Cauwenberghs and
+  * Poggio] would cost in code. Returns false if the system is singular, in
+  * which case the path cannot be followed and the caller falls back on the
+  * iteration. */
+
+ bool solve_free_system( const Subset & S , Index c , doubleVec & beta ,
+                         double & beta_b ) const;
+
+/*--------------------------------------------------------------------------*/
+ /// moves the multiplier of c to \p to along the exact solution path
+ /** Moves the multiplier of the dual index \p c towards \p to keeping
+  * *every other* dual index at its own optimality condition, which is the
+  * incremental / decremental algorithm of
+  *
+  *   G. Cauwenberghs, T. Poggio "Incremental and Decremental Support Vector
+  *   Machine Learning" NIPS 13, 409 - 415, 2000
+  *
+  * The multipliers of the free indices and the bias follow the one of \p c
+  * along the direction that solve_free_system() gives, up to the first
+  * *event*: the multiplier of \p c reaches \p to, its own condition starts
+  * holding, a free multiplier reaches a bound, or a bounded one stops
+  * satisfying its condition and becomes free. At each event the direction is
+  * recomputed and the walk resumes, so what is left behind is optimal at
+  * every point of the path and exact when it stops.
+  *
+  * Growing a multiplier from zero is how a *new* sample is learnt, driving
+  * it to zero is how one is *unlearnt*, and the two are the same walk taken
+  * in opposite directions, hence the same code.
+  *
+  * Returns kOK if the path has been followed to its end and kError if it
+  * could not be, in which case nothing is claimed about the multipliers save
+  * that they are feasible, and the caller has to fall back on the
+  * iteration. */
+
+ int follow_path( Index c , double to );
+
+/*--------------------------------------------------------------------------*/
  /// the SMO iteration proper, for the dual with the equality constraint
 
  int solve_with_equality( void );
@@ -502,6 +590,7 @@ class SMOSolver : public Solver
  double f_tol = 1e-3;          ///< tolerance on the optimality conditions
  int f_max_iter = -1;          ///< maximum number of iterations, < 0 = none
  bool f_shrink = true;         ///< whether the active set is shrunk
+ bool f_path = true;           ///< whether the added samples are learnt
 
  /* How many shrinking passes are taken before the active set is restored
   * anyway: it bounds what a collapsed active set can cost in iterations,
@@ -564,6 +653,13 @@ class SMOSolver : public Solver
   * to compute() is dealt with in one go [see compose_smap()]. */
 
  Subset v_smap;
+
+ /// the dual indices that have no multiplier coming from the previous data
+ /// set, i.e., those the incremental path has to learn [see compute()]
+ Subset v_new;
+
+ bool f_rmvd = false;    ///< true if samples have been removed, not only added
+ bool f_optimal = false; ///< true if the last call to compute() found the optimum
 
  const double * f_ds = nullptr;     ///< shortcut to v_s.data()
  const double * f_dq = nullptr;     ///< shortcut to v_q.data()

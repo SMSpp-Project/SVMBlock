@@ -109,8 +109,60 @@ int SMOSolver::compute( bool changedvars )
  if( ( ! warm ) || ( ! resync() ) )
   reload();
 
+ const bool was_optimal = f_optimal;
+
  f_solved = false;
+ f_optimal = false;
  f_iter = 0;
+
+ /* If the only thing that has changed is that samples have been *added*, and
+  * what was there was optimal, the new multipliers are learnt one at a time
+  * along the exact solution path: each of them is grown from zero keeping
+  * every other index at its own condition, so that when the last one is done
+  * the solution is the optimal one of the new data set and there is nothing
+  * left to iterate on [see follow_path()]. The conditions are checked all
+  * the same, and the iteration finishes the job if the path has not: an
+  * exact statement about a walk of floating point numbers is a statement
+  * about what it was meant to do, not about what it did. */
+
+ if( f_path && was_optimal && ( ! f_rmvd ) && ( ! v_new.empty() ) ) {
+  bool done = true;
+  for( auto c : v_new )
+   if( follow_path( c , f_u ) != kOK ) {
+    done = false;
+    break;
+    }
+
+  v_new.clear();
+
+  if( done ) {
+   double m = - Inf< double >() , M = Inf< double >();
+   for( Index k = 0 ; k < f_N ; ++k ) {
+    const double sk = f_ds[ k ] , gk = - sk * v_G[ k ];
+    if( ( sk > 0 ) ? ( v_alpha[ k ] < f_u ) : ( v_alpha[ k ] > 0 ) )
+     m = std::max( m , gk );
+    if( ( sk > 0 ) ? ( v_alpha[ k ] > 0 ) : ( v_alpha[ k ] < f_u ) )
+     M = std::min( M , gk );
+    }
+
+   if( m - M <= f_tol ) {   // the path has done the whole job
+    double v = 0;
+    for( Index k = 0 ; k < f_N ; ++k )
+     v += v_alpha[ k ] * ( v_G[ k ] + f_dq[ k ] );
+
+    f_value = - v / 2 + f_dc;
+    f_solved = true;
+    f_optimal = true;
+
+    unlock();
+
+    return( kOK );
+    }
+   }
+  }
+
+ v_new.clear();
+ f_rmvd = false;
 
  int status;
  if( f_rb ) {
@@ -155,6 +207,7 @@ int SMOSolver::compute( bool changedvars )
  f_value = - v / 2 + f_dc;
 
  f_solved = true;
+ f_optimal = ( status == kOK );
 
  unlock();  // unlock the mutex
 
@@ -289,7 +342,8 @@ void SMOSolver::compose_smap( const Modification * mod )
     nmap.push_back( v_smap[ i ] );
 
   v_smap = std::move( nmap );
-  }
+  f_rmvd = true;   // what is gone is gone: the previous solution is no longer
+  }                // optimal, whence the path cannot be walked from it
 
  }  // end( SMOSolver::compose_smap )
 
@@ -333,6 +387,8 @@ void SMOSolver::reload( void )
  f_dq = v_q.data();
 
  v_smap.clear();   // whatever has changed, this is a fresh start
+ v_new.clear();
+ f_rmvd = false;
 
  // start from the origin, where the gradient is just the linear term
  v_alpha.assign( f_N , 0 );
@@ -365,13 +421,20 @@ bool SMOSolver::resample( void )
   o_k[ { v_di_c[ k ] , v_s[ k ] > 0 } ] = k;
 
  doubleVec n_alpha( N , 0 );
+ Subset newidx;
+
  for( Index k = 0 ; k < N ; ++k ) {
   const Index i = v_smap[ di[ k ] ];
-  if( i == Inf< Index >() )   // a new sample: its multiplier starts at zero
+  if( i == Inf< Index >() ) {  // a new sample: its multiplier starts at zero
+   newidx.push_back( k );
    continue;
+   }
+
   auto it = o_k.find( { i , s[ k ] > 0 } );
   if( it != o_k.end() )
    n_alpha[ k ] = v_alpha[ it->second ];
+  else
+   newidx.push_back( k );      // a dual index that was not there before
   }
 
  // the data of the dual, which is the new one from here on
@@ -388,6 +451,7 @@ bool SMOSolver::resample( void )
  f_dq = v_q.data();
  f_di = v_di_c.data();
  v_alpha = std::move( n_alpha );
+ v_new = std::move( newidx );
  v_smap.clear();
 
  /* Removing a sample whose multiplier was nonzero leaves the equality
@@ -603,6 +667,358 @@ bool SMOSolver::restore_equality( void )
  return( true );
 
  }  // end( SMOSolver::restore_equality )
+
+/*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+/*--------------------- THE EXACT SOLUTION PATH ----------------------------*/
+/*--------------------------------------------------------------------------*/
+
+/* The optimality conditions of the dual, written in the form the path walks
+ * them, read: with h_k = G_k + s_k b, where b is the multiplier of the
+ * equality constraint,
+ *
+ *   alpha_k = 0      ==>  h_k >= 0
+ *   0 < alpha_k < u  ==>  h_k =  0        ( a *free* index, on the margin )
+ *   alpha_k = u      ==>  h_k <= 0
+ *
+ * which is the same thing the SMO iteration checks as
+ * max { g_i : i in I_up } <= min { g_j : j in I_low } with g_k = - s_k G_k
+ * and b the common value at optimality. */
+
+bool SMOSolver::solve_free_system( const Subset & S , Index c ,
+                                   doubleVec & beta , double & beta_b ) const
+{
+ const Index ns = S.size();
+ const Index nb = f_rb ? 0 : 1;   // the border row, if there is an equality
+ const Index dim = ns + nb;
+
+ beta.assign( ns , 0 );
+ beta_b = 0;
+
+ if( ! dim )   // nothing moves with c, and nothing has to
+  return( true );
+
+ std::vector< double > A( dim * dim , 0 ) , r( dim );
+
+ for( Index i = 0 ; i < ns ; ++i ) {
+  for( Index j = 0 ; j < ns ; ++j )
+   A[ i * dim + j ] = Q( S[ i ] , S[ j ] );
+
+  if( nb )
+   A[ i * dim + ns ] = f_ds[ S[ i ] ];
+
+  r[ i ] = - Q( S[ i ] , c );
+  }
+
+ if( nb ) {
+  for( Index j = 0 ; j < ns ; ++j )
+   A[ ns * dim + j ] = f_ds[ S[ j ] ];
+
+  r[ ns ] = - f_ds[ c ];
+  }
+
+ // Gaussian elimination with partial pivoting- - - - - - - - - - - - - - - -
+
+ for( Index k = 0 ; k < dim ; ++k ) {
+  Index p = k;
+  for( Index i = k + 1 ; i < dim ; ++i )
+   if( std::abs( A[ i * dim + k ] ) > std::abs( A[ p * dim + k ] ) )
+    p = i;
+
+  if( std::abs( A[ p * dim + k ] ) < 1e-12 )
+   return( false );   // singular: the path cannot be followed from here
+
+  if( p != k ) {
+   for( Index j = k ; j < dim ; ++j )
+    std::swap( A[ p * dim + j ] , A[ k * dim + j ] );
+   std::swap( r[ p ] , r[ k ] );
+   }
+
+  for( Index i = k + 1 ; i < dim ; ++i ) {
+   const double f = A[ i * dim + k ] / A[ k * dim + k ];
+   if( ! f )
+    continue;
+
+   for( Index j = k ; j < dim ; ++j )
+    A[ i * dim + j ] -= f * A[ k * dim + j ];
+
+   r[ i ] -= f * r[ k ];
+   }
+  }
+
+ for( Index k = dim ; k-- > 0 ; ) {
+  double v = r[ k ];
+  for( Index j = k + 1 ; j < dim ; ++j )
+   v -= A[ k * dim + j ] * ( ( j < ns ) ? beta[ j ] : beta_b );
+
+  v /= A[ k * dim + k ];
+
+  if( k < ns )
+   beta[ k ] = v;
+  else
+   beta_b = v;
+  }
+
+ return( true );
+
+ }  // end( SMOSolver::solve_free_system )
+
+/*--------------------------------------------------------------------------*/
+
+int SMOSolver::follow_path( Index c , double to )
+{
+ static const double dPEps = 1e-9;    // what counts as being at a bound
+ static const double dPZero = 1e-12;  // what counts as no movement at all
+
+ const Index maxev = 10 * f_N + 100;  // a path that long is a path gone wrong
+
+ auto hof = [ this ]( Index k ) { return( v_G[ k ] + f_ds[ k ] * f_b ); };
+
+ for( Index ev = 0 ; ev < maxev ; ++ev ) {
+
+  // where the multiplier of c has to go, and whether it is there already- -
+
+  const double dist = to - v_alpha[ c ];
+  const double dir = ( dist > 0 ) ? 1 : -1;
+
+  if( std::abs( dist ) <= dPZero )
+   return( kOK );                  // it has arrived
+
+  const double hc = hof( c );
+
+  if( ( dir > 0 ) && ( hc >= - dPEps ) )
+   return( kOK );                  // its own condition holds where it is
+
+  // how the free multipliers and the bias follow it - - - - - - - - - - - -
+
+  /* The margin: the indices whose multiplier is strictly inside its bounds
+   * and *also* those that sit at a bound with their own condition holding
+   * with equality, which is where a previous event has left them. The latter
+   * are on the margin exactly as the former, they simply cannot leave their
+   * bound on the wrong side, which is what the pruning below sees to. */
+
+  std::vector< bool > in_S( f_N , false );
+  Subset S;
+
+  for( Index k = 0 ; k < f_N ; ++k ) {
+   if( k == c )
+    continue;
+
+   if( ( ( v_alpha[ k ] > dPEps ) && ( v_alpha[ k ] < f_u - dPEps ) ) ||
+       ( std::abs( hof( k ) ) <= dPEps ) ) {
+    in_S[ k ] = true;
+    S.push_back( k );
+    }
+   }
+
+  doubleVec beta;
+  double beta_b = 0;
+
+  if( S.empty() && ( ! f_rb ) ) {
+   /* No multiplier can absorb the movement of c and keep s^T alpha where it
+    * is: what moves is the bias alone, until some index stops satisfying its
+    * own condition and becomes free, and from there the walk resumes. */
+
+   const double bdir = ( hc < 0 ) ? f_ds[ c ] : - f_ds[ c ];
+   double mag = Inf< double >();
+   Index who = f_N;
+
+   for( Index k = 0 ; k < f_N ; ++k ) {
+    if( k == c )
+     continue;
+
+    const double dh = f_ds[ k ] * bdir;   // how h_k moves per unit of bias
+    if( std::abs( dh ) <= dPZero )
+     continue;
+
+    const double t = - hof( k ) / dh;
+    if( ( t > dPZero ) && ( t < mag ) ) { mag = t; who = k; }
+    }
+
+   // the bias only has to move until c is happy, if that comes first
+   const double tc = - hc / ( f_ds[ c ] * bdir );
+   if( ( tc > 0 ) && ( tc <= mag ) ) {
+    f_b += bdir * tc;
+    return( kOK );
+    }
+
+   if( who == f_N )   // nothing stops the bias: the dual is unbounded
+    return( kError );
+
+   f_b += bdir * mag;
+   continue;
+   }
+
+  /* Whoever is at a bound and would be pushed out of it is not on the margin
+   * after all: it leaves and the direction is computed again, which can only
+   * happen as many times as there are indices on it. */
+
+  for( ; ; ) {
+   if( ! solve_free_system( S , c , beta , beta_b ) )
+    return( kError );
+
+   Subset kept;
+   kept.reserve( S.size() );
+
+   for( Index i = 0 ; i < S.size() ; ++i ) {
+    const Index k = S[ i ];
+    const double db = beta[ i ] * dir;
+
+    if( ( ( v_alpha[ k ] <= dPEps ) && ( db < - dPZero ) ) ||
+        ( ( v_alpha[ k ] >= f_u - dPEps ) && ( db > dPZero ) ) ) {
+     in_S[ k ] = false;
+     continue;
+     }
+
+    kept.push_back( k );
+    }
+
+   if( kept.size() == S.size() )
+    break;
+
+   S = std::move( kept );
+   }
+
+  /* The direction in which the whole state moves: the multipliers of the
+   * free indices by beta, the bias by beta_b and, through them, the gradient
+   * of every index by the corresponding column of the Hessian. */
+
+  doubleVec w( f_N );
+  for( Index k = 0 ; k < f_N ; ++k ) {
+   double wk = Q( k , c );
+   for( Index i = 0 ; i < S.size() ; ++i )
+    wk += Q( k , S[ i ] ) * beta[ i ];
+   w[ k ] = wk;
+   }
+
+  auto gof = [ & ]( Index k ) {   // how h_k moves per unit of movement of c
+   return( w[ k ] + f_ds[ k ] * beta_b );
+   };
+
+  // the first event along it- - - - - - - - - - - - - - - - - - - - - - - -
+
+  double mag = std::abs( dist );   // the multiplier of c reaching its target
+  int what = 0;
+  Index who = f_N;
+
+  { const double gc = gof( c ) * dir;   // c satisfying its own condition
+    if( ( dir > 0 ) && ( gc > dPZero ) ) {
+     const double t = - hc / gc;
+     if( ( t >= 0 ) && ( t < mag ) ) { mag = t; what = 1; }
+     }
+    }
+
+  for( Index i = 0 ; i < S.size() ; ++i ) {   // a free multiplier bound
+   const double db = beta[ i ] * dir;
+   if( std::abs( db ) <= dPZero )
+    continue;
+
+   const Index k = S[ i ];
+   const double room = ( db > 0 ) ? ( f_u - v_alpha[ k ] ) : v_alpha[ k ];
+   const double t = room / std::abs( db );
+   if( t < mag ) { mag = t; what = 2; who = k; }
+   }
+
+  for( Index k = 0 ; k < f_N ; ++k ) {   // an index reaching the margin
+   if( ( k == c ) || in_S[ k ] )
+    continue;
+
+   const double dh = gof( k ) * dir;
+   if( std::abs( dh ) <= dPZero )
+    continue;
+
+   const double t = - hof( k ) / dh;
+   if( ( t > dPZero ) && ( t < mag ) ) { mag = t; what = 3; who = k; }
+   }
+
+  if( ! ( mag < Inf< double >() ) )   // nothing stops the walk
+   return( kError );
+
+  // walk that far - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  const double da = dir * mag;
+
+  v_alpha[ c ] += da;
+  for( Index i = 0 ; i < S.size() ; ++i )
+   v_alpha[ S[ i ] ] += beta[ i ] * da;
+
+  f_b += beta_b * da;
+
+  for( Index k = 0 ; k < f_N ; ++k )
+   v_G[ k ] += w[ k ] * da;
+
+  // snap to the bounds, so that the free set is what it looks like- - - - -
+
+  auto snap = [ this ]( Index k ) {
+   if( v_alpha[ k ] < dPEps )
+    v_alpha[ k ] = 0;
+   else
+    if( v_alpha[ k ] > f_u - dPEps )
+     v_alpha[ k ] = f_u;
+   };
+
+  snap( c );
+  for( auto k : S )
+   snap( k );
+
+  if( what == 2 )
+   snap( who );
+
+  ++f_iter;
+
+  if( what == 1 )   // c is on the margin: nothing more is asked of it
+   return( kOK );
+  }
+
+ return( kError );   // the path did not end where it should have
+
+ }  // end( SMOSolver::follow_path )
+
+/*--------------------------------------------------------------------------*/
+
+int SMOSolver::unlearn( Index i )
+{
+ if( ! f_SVM )
+  throw( std::logic_error( "SMOSolver::unlearn: no SVMBlock is set" ) );
+
+ if( ! f_solved )
+  throw( std::logic_error( "SMOSolver::unlearn: there is no solution to "
+                           "unlearn a sample from" ) );
+
+ if( i >= f_n )
+  throw( std::invalid_argument( "SMOSolver::unlearn: no such sample" ) );
+
+ lock();
+
+ f_iter = 0;
+ int status = kOK;
+
+ /* A sample has one multiplier in a classification problem and two in a
+  * regression one, and at most one of the two is nonzero: each of them is
+  * driven to zero in turn, the ones that are there already costing nothing.
+  */
+
+ for( Index k = 0 ; ( k < f_N ) && ( status == kOK ) ; ++k )
+  if( f_di[ k ] == i )
+   status = follow_path( k , 0 );
+
+ if( status == kOK ) {
+  // the value of the dual at the solution, as compute() computes it
+  double v = 0;
+  for( Index k = 0 ; k < f_N ; ++k )
+   v += v_alpha[ k ] * ( v_G[ k ] + f_dq[ k ] );
+
+  f_value = - v / 2 + f_dc;
+  }
+ else
+  f_solved = false;
+
+ unlock();
+
+ return( status );
+
+ }  // end( SMOSolver::unlearn )
 
 /*--------------------------------------------------------------------------*/
 
