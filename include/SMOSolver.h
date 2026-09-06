@@ -268,6 +268,20 @@ class SMOSolver : public Solver
   dblLastAlgParSMOS  ///< 1st allowed new double parameter for derived classes
   };
 
+/*--------------------------------------------------------------------------*/
+ /// extends Solver::int_par_type_S with the SMOSolver parameters
+
+ enum int_par_type_SMOS {
+  intSMOShrink = intLastAlgPar ,  ///< whether the active set is shrunk
+  /**< Nonzero if the multipliers that provably cannot be selected are taken
+   * out of the active set, so that the iterations, which cost \f$ O( | A | )
+   * \f$, get cheaper as the solution settles. This changes nothing in what
+   * is reported: the optimality conditions are always checked on the whole
+   * index space before stopping, the gradient of what had been left out
+   * being recomputed for the purpose. Defaults to 1. */
+  intLastAlgParSMOS  ///< 1st allowed new int parameter for derived classes
+  };
+
  using Solver::set_par;  // keep the other set_par() overloads visible
 
  /// honoured parameter: dblSMOTol
@@ -276,9 +290,10 @@ class SMOSolver : public Solver
   Solver::set_par( par , value );
   }
 
- /// honoured parameter: intMaxIter
+ /// honoured parameters: intMaxIter, intSMOShrink
  void set_par( idx_type par , int value ) override {
   if( par == intMaxIter ) { f_max_iter = value; return; }
+  if( par == intSMOShrink ) { f_shrink = bool( value ); return; }
   Solver::set_par( par , value );
   }
 
@@ -289,7 +304,28 @@ class SMOSolver : public Solver
 
  [[nodiscard]] int get_int_par( idx_type par ) const override {
   if( par == intMaxIter ) return( f_max_iter );
+  if( par == intSMOShrink ) return( int( f_shrink ) );
   return( Solver::get_int_par( par ) );
+  }
+
+ [[nodiscard]] idx_type get_num_int_par( void ) const override {
+  return( Solver::get_num_int_par() + intLastAlgParSMOS - intLastAlgPar );
+  }
+
+ [[nodiscard]] int get_dflt_int_par( idx_type par ) const override {
+  return( par == intSMOShrink ? 1 : Solver::get_dflt_int_par( par ) );
+  }
+
+ [[nodiscard]] idx_type int_par_str2idx( const std::string & name )
+  const override {
+  return( name == "intSMOShrink" ? intSMOShrink
+                                 : Solver::int_par_str2idx( name ) );
+  }
+
+ [[nodiscard]] const std::string & int_par_idx2str( idx_type idx )
+  const override {
+  static const std::string name = "intSMOShrink";
+  return( idx == intSMOShrink ? name : Solver::int_par_idx2str( idx ) );
   }
 
  [[nodiscard]] idx_type get_num_dbl_par( void ) const override {
@@ -389,6 +425,54 @@ class SMOSolver : public Solver
  bool restore_equality( void );
 
 /*--------------------------------------------------------------------------*/
+ /// exchanges the two entries of the current order of the dual indices
+ /** Exchanges everything that is indexed by the position of a dual index in
+  * the current order: the multiplier, the gradient, the diagonal, the sign,
+  * the linear coefficient, the sample and the order itself. Note that the
+  * Gram matrix is *not* touched, being indexed by the sample rather than by
+  * the dual index. */
+
+ void swap_index( Index a , Index b );
+
+/*--------------------------------------------------------------------------*/
+ /// takes out of the active set what cannot be selected any more
+ /** Moves past the end of the active set every dual index that, given the
+  * largest value \p m and the smallest value \p M of the bias that the
+  * multipliers allow, can be neither of the two of a violating pair: an
+  * index at a bound whose own value of the bias is on the wrong side of the
+  * interval [ \p M , \p m ] is one such. The exclusion is not permanent:
+  * unshrink() puts everything back before the optimality conditions are
+  * declared to hold. */
+
+ void shrink( double m , double M );
+
+/*--------------------------------------------------------------------------*/
+ /// the same, for the dual without the equality constraint
+ /** Moves past the end of the active set every dual index that is at a bound
+  * satisfying its own optimality condition by more than the largest
+  * violation \p viol left on the active set, hence that a step of the size
+  * the others still allow cannot wake up. */
+
+ void shrink_box( double viol );
+
+/*--------------------------------------------------------------------------*/
+ /// puts back into the active set everything that had been taken out
+ /** Restores the whole index space, recomputing the gradient of what had
+  * been left out, which the steps taken in the meantime have made stale:
+  * G = Q alpha + q costs one row of the Gram matrix per *nonzero* multiplier
+  * rather than one per index restored. */
+
+ void unshrink( void );
+
+/*--------------------------------------------------------------------------*/
+ /// puts the dual indices back in the order the SVMBlock has them
+ /** Undoes the permutation the shrinking has built, so that everything the
+  * Solver holds is again indexed by the dual index of the SVMBlock, which is
+  * what the caller, the realignment and the solution reading all assume. */
+
+ void restore_order( void );
+
+/*--------------------------------------------------------------------------*/
  /// the SMO iteration proper, for the dual with the equality constraint
 
  int solve_with_equality( void );
@@ -417,6 +501,13 @@ class SMOSolver : public Solver
 
  double f_tol = 1e-3;          ///< tolerance on the optimality conditions
  int f_max_iter = -1;          ///< maximum number of iterations, < 0 = none
+ bool f_shrink = true;         ///< whether the active set is shrunk
+
+ /* How many shrinking passes are taken before the active set is restored
+  * anyway: it bounds what a collapsed active set can cost in iterations,
+  * which is the other half of the trade-off the shrinking is. */
+
+ Index f_patience = 20;
 
  bool f_solved = false;        ///< true if a solution is available
  double f_value = 0;           ///< the value of the dual at the solution
@@ -427,6 +518,15 @@ class SMOSolver : public Solver
  doubleVec v_G;                ///< the gradient of the dual at them
 
  doubleVec v_QD;               ///< the diagonal of the Hessian of the dual
+
+ /* The active set is a *prefix* of the current order of the dual indices:
+  * shrinking an index is exchanging it with the last active one, which keeps
+  * every scan of the active set sequential, as it would be without
+  * shrinking at all. The order is undone before compute() returns [see
+  * restore_order()], so that nothing outside this class ever sees it. */
+
+ Index f_act = 0;              ///< the size of the active set
+ IndexVec v_perm;              ///< where each entry of the order came from
 
  // the data of the dual, cached out of the SVMBlock- - - - - - - - - - - - -
 

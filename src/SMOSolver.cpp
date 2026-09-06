@@ -305,10 +305,15 @@ void SMOSolver::reload( void )
  f_rw = f_SVM->get_reg_weight();
 
  f_K = f_SVM->get_K().data();
- f_di = f_SVM->get_dual_samples().data();
 
  v_s = f_SVM->get_dual_signs();
  v_di_c = f_SVM->get_dual_samples();
+
+ /* The sample of each dual index is read out of the *copy*, and not out of
+  * the SVMBlock, because the shrinking reorders the dual indices [see
+  * swap_index()]; the copy is put back in the order of the SVMBlock before
+  * compute() returns. */
+ f_di = v_di_c.data();
 
  /* The linear term of the primal shifts the linear coefficients of the dual,
   * moves the right-hand side of the equality constraint and adds a constant
@@ -376,12 +381,12 @@ bool SMOSolver::resample( void )
  f_d = f_SVM->get_squared_loss() ? 1 / ( 2 * f_SVM->get_C() ) : 0;
  f_rw = f_SVM->get_reg_weight();
  f_K = f_SVM->get_K().data();
- f_di = di.data();
  v_s = s;
  v_q = q;
  v_di_c = di;
  f_ds = v_s.data();
  f_dq = v_q.data();
+ f_di = v_di_c.data();
  v_alpha = std::move( n_alpha );
  v_smap.clear();
 
@@ -460,8 +465,9 @@ bool SMOSolver::resync( void )
    return( false );
   }
 
- f_K = f_SVM->get_K().data();  // both may have been moved elsewhere in the
- f_di = f_SVM->get_dual_samples().data();            // meantime
+ f_K = f_SVM->get_K().data();   // it may have been moved elsewhere in the
+ v_di_c = f_SVM->get_dual_samples();                  // meantime
+ f_di = v_di_c.data();
 
  /* The gradient G = Q alpha + q is affine in the multipliers, in the linear
   * term and in the diagonal alike, whence each of the three changes below is
@@ -600,6 +606,110 @@ bool SMOSolver::restore_equality( void )
 
 /*--------------------------------------------------------------------------*/
 
+void SMOSolver::swap_index( Index a , Index b )
+{
+ if( a == b )
+  return;
+
+ std::swap( v_alpha[ a ] , v_alpha[ b ] );
+ std::swap( v_G[ a ] , v_G[ b ] );
+ std::swap( v_QD[ a ] , v_QD[ b ] );
+ std::swap( v_s[ a ] , v_s[ b ] );
+ std::swap( v_q[ a ] , v_q[ b ] );
+ std::swap( v_di_c[ a ] , v_di_c[ b ] );
+ std::swap( v_perm[ a ] , v_perm[ b ] );
+
+ }  // end( SMOSolver::swap_index )
+
+/*--------------------------------------------------------------------------*/
+
+void SMOSolver::shrink( double m , double M )
+{
+ for( Index k = 0 ; k < f_act ; ) {
+  const double sk = f_ds[ k ];
+  const double gk = - sk * v_G[ k ];
+  const bool up = ( sk > 0 ) ? ( v_alpha[ k ] < f_u ) : ( v_alpha[ k ] > 0 );
+  const bool low = ( sk > 0 ) ? ( v_alpha[ k ] > 0 ) : ( v_alpha[ k ] < f_u );
+
+  /* A multiplier that cannot be increased is of no use if its own value of
+   * the bias is larger than the largest one the others allow, since it can
+   * then be neither the index the pair is selected from nor the one that
+   * makes a violating pair with it, and symmetrically for one that cannot be
+   * decreased. "Of no use" is meant at the current multipliers, which is why
+   * everything is put back before the conditions are declared to hold. */
+
+  if( ( ( ! up ) && ( gk > m ) ) || ( ( ! low ) && ( gk < M ) ) ) {
+   swap_index( k , --f_act );
+   continue;   // whatever has just been moved to k has not been looked at
+   }
+
+  ++k;
+  }
+ }  // end( SMOSolver::shrink )
+
+/*--------------------------------------------------------------------------*/
+
+void SMOSolver::shrink_box( double viol )
+{
+ for( Index k = 0 ; k < f_act ; ) {
+  const double ak = v_alpha[ k ];
+  const double gk = v_G[ k ];
+
+  // at a bound, and satisfying its own condition by more than what is left
+  // to gain elsewhere: a step of the size the others allow cannot wake it up
+  if( ( ( ( ak <= 0 ) && ( gk > 0 ) ) || ( ( ak >= f_u ) && ( gk < 0 ) ) ) &&
+      ( std::abs( gk ) > viol ) ) {
+   swap_index( k , --f_act );
+   continue;
+   }
+
+  ++k;
+  }
+ }  // end( SMOSolver::shrink_box )
+
+/*--------------------------------------------------------------------------*/
+
+void SMOSolver::unshrink( void )
+{
+ if( f_act >= f_N )
+  return;
+
+ /* The gradient of what has been left out is stale, the steps taken in the
+  * meantime having skipped it: G = Q alpha + q is recomputed here, one row
+  * of the Gram matrix per *nonzero* multiplier rather than one per index
+  * restored, since a multiplier that is zero contributes nothing. */
+
+ for( Index k = f_act ; k < f_N ; ++k )
+  v_G[ k ] = f_dq[ k ] + f_d * v_alpha[ k ];
+
+ for( Index l = 0 ; l < f_N ; ++l ) {
+  const double al = v_alpha[ l ];
+  if( ! al )
+   continue;
+
+  const double cl = f_ds[ l ] * al / f_rw;
+  const double * Kl = f_K + std::size_t( f_di[ l ] ) * f_n;
+
+  for( Index k = f_act ; k < f_N ; ++k )
+   v_G[ k ] += f_ds[ k ] * ( Kl[ f_di[ k ] ] + f_rb ) * cl;
+  }
+
+ f_act = f_N;
+
+ }  // end( SMOSolver::unshrink )
+
+/*--------------------------------------------------------------------------*/
+
+void SMOSolver::restore_order( void )
+{
+ for( Index k = 0 ; k < f_N ; ++k )
+  while( v_perm[ k ] != k )
+   swap_index( k , v_perm[ k ] );
+
+ }  // end( SMOSolver::restore_order )
+
+/*--------------------------------------------------------------------------*/
+
 void SMOSolver::fill_diagonal( void )
 {
  /* The diagonal of the Hessian of the dual, which the selection of the
@@ -645,17 +755,61 @@ int SMOSolver::solve_with_equality( void )
   * Every so often the multipliers that are at a bound and cannot be selected
   * are taken out of the active set [see shrink()], so that the iterations,
   * which cost O( | A | ), become cheaper as the solution settles; when the
-  * conditions hold on the active set they are checked on the whole of it
-  * [see unshrink()], and the algorithm only stops if they hold there too. */
+  * conditions hold on the active set everything is put back [see
+  * unshrink()] and they are checked on the whole index space, the algorithm
+  * only stopping if they hold there too. Everything is put back every so
+  * often anyway, since an active set that has collapsed can grind on a poor
+  * pair while the whole index space would offer a far better step. */
+
+ v_perm.resize( f_N );
+ std::iota( v_perm.begin() , v_perm.end() , Index( 0 ) );
+ f_act = f_N;
+
+ // the bias interval of the previous iteration, which is what the shrinking
+ // is decided on; the first one shrinks nothing, there being no interval yet
+ double pm = Inf< double >() , pM = - Inf< double >();
+
+ /* Shrinking at every iteration costs more than it saves: the interval
+  * [ M , m ] is computed on the active set, so the more is taken out the
+  * narrower it gets and the more the next pass takes out, and the pair that
+  * is left to select is a poor one, which is paid in iterations. It is
+  * therefore done every so often, as in [Chang and Lin, LIBSVM], which keeps
+  * the interval that decides it one of a set that is still large. */
+
+ const Index period = std::min( f_N , Index( 1000 ) );
+ Index counter = period;
+
+ /* An active set that has collapsed can also *cost* iterations, and many of
+  * them: the pair that is left to select is a poor one, and the algorithm
+  * grinds on it while the whole index space would offer a far better step.
+  * The state is therefore restored every so often even when nothing asks for
+  * it, so that the good steps keep being taken and what the shrinking can
+  * cost is bounded by how rarely that happens. */
+
+ Index passes = 0;   // shrinking passes since the last full restore
 
  while( ( f_max_iter < 0 ) || ( f_iter < Index( f_max_iter ) ) ) {
 
+  if( counter )
+   --counter;
+
+  if( f_shrink && ( ! counter ) && ( pM > - Inf< double >() ) ) {
+   counter = period;
+
+   if( ( f_act < f_N ) && ( ++passes >= f_patience ) ) {
+    unshrink();
+    passes = 0;
+    }
+   else
+    shrink( pm , pM );
+   }
+
   // select the first index of the pair: the maximal violating one - - - - -
 
-  Index i = f_N;
+  Index i = f_act;
   double m = - Inf< double >();
 
-  for( Index k = 0 ; k < f_N ; ++k ) {
+  for( Index k = 0 ; k < f_act ; ++k ) {
    const double sk = f_ds[ k ];
    const double gk = - sk * v_G[ k ];
    const bool up = ( sk > 0 ) ? ( v_alpha[ k ] < f_u ) : ( v_alpha[ k ] > 0 );
@@ -668,14 +822,14 @@ int SMOSolver::solve_with_equality( void )
    * minimal violating index is computed along the way, since it is what the
    * optimality conditions are stated in terms of. */
 
-  Index j = f_N;
+  Index j = f_act;
   double M = Inf< double >() , best = 0;
 
-  const double * Ki = ( i < f_N ) ? f_K + std::size_t( f_di[ i ] ) * f_n
-                                  : nullptr;
+  const double * Ki = ( i < f_act ) ? f_K + std::size_t( f_di[ i ] ) * f_n
+                                    : nullptr;
   const double Qii = Ki ? v_QD[ i ] : 0;
 
-  for( Index k = 0 ; k < f_N ; ++k ) {
+  for( Index k = 0 ; k < f_act ; ++k ) {
    const double sk = f_ds[ k ];
    const double gk = - sk * v_G[ k ];
    const bool low = ( sk > 0 ) ? ( v_alpha[ k ] > 0 ) : ( v_alpha[ k ] < f_u );
@@ -709,11 +863,29 @@ int SMOSolver::solve_with_equality( void )
 
   // at optimality the two sides coincide with the multiplier of the equality
   // constraint, i.e., with the bias; in general it is any value in between
-  if( ( i < f_N ) && ( M < Inf< double >() ) )
+  if( ( i < f_act ) && ( M < Inf< double >() ) )
    f_b = ( m + M ) / 2;
 
-  if( ( i == f_N ) || ( j == f_N ) || ( m - M <= f_tol ) )
+  if( ( i == f_act ) || ( j == f_act ) || ( m - M <= f_tol ) ) {
+   if( f_act < f_N ) {
+    /* The conditions hold on the active set, which says nothing about the
+     * rest: everything comes back, the gradient of what was out is made
+     * good again and the conditions are checked where they have to hold. If
+     * they do not, what is left is the endgame, and it is played on
+     * everything. */
+    unshrink();
+    passes = 0;
+    pm = Inf< double >();
+    pM = - Inf< double >();
+    continue;
+    }
+
+   restore_order();
    return( kOK );  // the optimality conditions hold
+   }
+
+  pm = m;
+  pM = M;
 
   // minimize along the only feasible direction changing alpha_i, alpha_j - -
 
@@ -730,8 +902,18 @@ int SMOSolver::solve_with_equality( void )
   const double tj = ( sj > 0 ) ? v_alpha[ j ] : f_u - v_alpha[ j ];
   t = std::min( t , std::min( ti , tj ) );
 
-  if( t <= 0 )  // no progress is possible: numerically optimal
-   return( kOK );
+  if( t <= 0 ) {   // no progress is possible along this pair
+   if( f_act < f_N ) {
+    unshrink();
+    passes = 0;
+    pm = Inf< double >();
+    pM = - Inf< double >();
+    continue;
+    }
+
+   restore_order();
+   return( kOK );  // numerically optimal
+   }
 
   const double dai = si * t;
   const double daj = - sj * t;
@@ -758,7 +940,7 @@ int SMOSolver::solve_with_equality( void )
    * when it comes back in. */
   const double di = si * dai / f_rw , dj = sj * daj / f_rw;
 
-  for( Index k = 0 ; k < f_N ; ++k )
+  for( Index k = 0 ; k < f_act ; ++k )
    v_G[ k ] += f_ds[ k ] * ( ( Ki[ f_di[ k ] ] + f_rb ) * di +
                              ( Kj[ f_di[ k ] ] + f_rb ) * dj );
 
@@ -769,6 +951,10 @@ int SMOSolver::solve_with_equality( void )
 
   ++f_iter;
   }
+
+ // the iteration limit is not a reason to leave the state half done
+ unshrink();
+ restore_order();
 
  return( kStopIter );
 
@@ -787,12 +973,41 @@ int SMOSolver::solve_box( void )
   * bound and satisfy their own condition are shrunk away exactly as in the
   * other case. */
 
+ v_perm.resize( f_N );
+ std::iota( v_perm.begin() , v_perm.end() , Index( 0 ) );
+ f_act = f_N;
+
+ // the largest violation of the previous iteration, which is what the
+ // shrinking is decided on; the first one shrinks nothing
+ double pv = - Inf< double >();
+
+ // as in solve_with_equality(), the active set is thinned out every so often
+ // rather than at every iteration, and it is restored every so often even
+ // when nothing asks for it, so that a collapsed one cannot grind
+ const Index period = std::min( f_N , Index( 1000 ) );
+ Index counter = period;
+ Index passes = 0;
+
  while( ( f_max_iter < 0 ) || ( f_iter < Index( f_max_iter ) ) ) {
 
-  Index i = f_N;
+  if( counter )
+   --counter;
+
+  if( f_shrink && ( ! counter ) && ( pv > - Inf< double >() ) ) {
+   counter = period;
+
+   if( ( f_act < f_N ) && ( ++passes >= f_patience ) ) {
+    unshrink();
+    passes = 0;
+    }
+   else
+    shrink_box( pv );
+   }
+
+  Index i = f_act;
   double viol = 0 , best = 0;
 
-  for( Index k = 0 ; k < f_N ; ++k ) {
+  for( Index k = 0 ; k < f_act ; ++k ) {
    const double ak = v_alpha[ k ];
    double pg = v_G[ k ];
    if( ( ak <= 0 ) && ( pg > 0 ) )
@@ -813,8 +1028,19 @@ int SMOSolver::solve_box( void )
    if( dec > best ) { best = dec; i = k; }
    }
 
-  if( ( i == f_N ) || ( viol <= f_tol ) )  // the optimality conditions hold
-   return( kOK );
+  if( ( i == f_act ) || ( viol <= f_tol ) ) {
+   if( f_act < f_N ) {   // they may only hold on the active set
+    unshrink();
+    passes = 0;
+    pv = - Inf< double >();
+    continue;
+    }
+
+   restore_order();
+   return( kOK );  // the optimality conditions hold
+   }
+
+  pv = viol;
 
   double a = v_QD[ i ];
   if( a <= 0 )
@@ -824,8 +1050,17 @@ int SMOSolver::solve_box( void )
   ai = std::max( double( 0 ) , std::min( ai , f_u ) );
 
   const double dai = ai - v_alpha[ i ];
-  if( dai == 0 )  // no progress is possible: numerically optimal
-   return( kOK );
+  if( dai == 0 ) {   // no progress is possible along this coordinate
+   if( f_act < f_N ) {
+    unshrink();
+    passes = 0;
+    pv = - Inf< double >();
+    continue;
+    }
+
+   restore_order();
+   return( kOK );  // numerically optimal
+   }
 
   v_alpha[ i ] = ai;
 
@@ -834,7 +1069,7 @@ int SMOSolver::solve_box( void )
 
   const double di = si * dai / f_rw;   // as in solve_with_equality()
 
-  for( Index k = 0 ; k < f_N ; ++k )
+  for( Index k = 0 ; k < f_act ; ++k )
    v_G[ k ] += f_ds[ k ] * ( Ki[ f_di[ k ] ] + f_rb ) * di;
 
   if( f_d )
@@ -842,6 +1077,10 @@ int SMOSolver::solve_box( void )
 
   ++f_iter;
   }
+
+ // the iteration limit is not a reason to leave the state half done
+ unshrink();
+ restore_order();
 
  return( kStopIter );
 
