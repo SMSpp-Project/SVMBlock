@@ -137,20 +137,29 @@ int SMOSolver::compute( bool changedvars )
 
   if( done ) {
    double m = - Inf< double >() , M = Inf< double >();
-   for( Index k = 0 ; k < f_N ; ++k ) {
-    const double sk = f_ds[ k ] , gk = - sk * v_G[ k ];
-    if( ( sk > 0 ) ? ( v_alpha[ k ] < f_u ) : ( v_alpha[ k ] > 0 ) )
-     m = std::max( m , gk );
-    if( ( sk > 0 ) ? ( v_alpha[ k ] > 0 ) : ( v_alpha[ k ] < f_u ) )
-     M = std::min( M , gk );
+
+   if( f_rb ) {   // no equality constraint: each coordinate on its own
+    m = 0;
+    M = 0;
+    for( Index k = 0 ; k < f_N ; ++k ) {
+     double pg = v_G[ k ];
+     if( ( ( v_alpha[ k ] <= 0 ) && ( pg > 0 ) ) ||
+         ( ( v_alpha[ k ] >= f_u ) && ( pg < 0 ) ) )
+      pg = 0;
+     m = std::max( m , std::abs( pg ) );
+     }
     }
+   else
+    for( Index k = 0 ; k < f_N ; ++k ) {
+     const double sk = f_ds[ k ] , gk = - sk * v_G[ k ];
+     if( ( sk > 0 ) ? ( v_alpha[ k ] < f_u ) : ( v_alpha[ k ] > 0 ) )
+      m = std::max( m , gk );
+     if( ( sk > 0 ) ? ( v_alpha[ k ] > 0 ) : ( v_alpha[ k ] < f_u ) )
+      M = std::min( M , gk );
+     }
 
    if( m - M <= f_tol ) {   // the path has done the whole job
-    double v = 0;
-    for( Index k = 0 ; k < f_N ; ++k )
-     v += v_alpha[ k ] * ( v_G[ k ] + f_dq[ k ] );
-
-    f_value = - v / 2 + f_dc;
+    path_solution();
     f_solved = true;
     f_optimal = true;
 
@@ -773,7 +782,14 @@ int SMOSolver::follow_path( Index c , double to )
 
  const Index maxev = 10 * f_N + 100;  // a path that long is a path gone wrong
 
- auto hof = [ this ]( Index k ) { return( v_G[ k ] + f_ds[ k ] * f_b ); };
+ /* The quantity the conditions are written in: with the equality constraint
+  * it is the gradient shifted by the bias, which is its multiplier, and
+  * without it, i.e. with the bias regularised, the gradient itself, the
+  * conditions of a box being the ones of each coordinate on its own. */
+
+ auto hof = [ this ]( Index k ) {
+  return( f_rb ? v_G[ k ] : v_G[ k ] + f_ds[ k ] * f_b );
+  };
 
  for( Index ev = 0 ; ev < maxev ; ++ev ) {
 
@@ -893,7 +909,7 @@ int SMOSolver::follow_path( Index c , double to )
    }
 
   auto gof = [ & ]( Index k ) {   // how h_k moves per unit of movement of c
-   return( w[ k ] + f_ds[ k ] * beta_b );
+   return( f_rb ? w[ k ] : w[ k ] + f_ds[ k ] * beta_b );
    };
 
   // the first event along it- - - - - - - - - - - - - - - - - - - - - - - -
@@ -977,6 +993,31 @@ int SMOSolver::follow_path( Index c , double to )
 
 /*--------------------------------------------------------------------------*/
 
+void SMOSolver::path_solution( void )
+{
+ /* With the bias regularised there is no equality constraint, hence no
+  * multiplier of it: the bias is one more component of the model and is read
+  * off the multipliers, exactly as compute() does after the iteration. */
+
+ if( f_rb ) {
+  double sa = 0;
+  for( Index k = 0 ; k < f_N ; ++k )
+   sa += f_ds[ k ] * v_alpha[ k ];
+
+  f_b = ( sa - f_SVM->get_linear_bias() ) / f_rw;
+  }
+
+ // the value of the dual at the solution: 1/2 alpha^T ( G + q )
+ double v = 0;
+ for( Index k = 0 ; k < f_N ; ++k )
+  v += v_alpha[ k ] * ( v_G[ k ] + f_dq[ k ] );
+
+ f_value = - v / 2 + f_dc;
+
+ }  // end( SMOSolver::path_solution )
+
+/*--------------------------------------------------------------------------*/
+
 int SMOSolver::unlearn( Index i )
 {
  if( ! f_SVM )
@@ -1004,15 +1045,17 @@ int SMOSolver::unlearn( Index i )
    status = follow_path( k , 0 );
 
  if( status == kOK ) {
-  // the value of the dual at the solution, as compute() computes it
-  double v = 0;
-  for( Index k = 0 ; k < f_N ; ++k )
-   v += v_alpha[ k ] * ( v_G[ k ] + f_dq[ k ] );
-
-  f_value = - v / 2 + f_dc;
+  path_solution();
   }
  else
   f_solved = false;
+
+ /* What is left is the optimum of the problem *without* that sample, which
+  * is not the one of the SVMBlock: whoever adds samples after this cannot
+  * learn them along the path, there being no optimum to walk away from [see
+  * compute()]. */
+
+ f_optimal = false;
 
  unlock();
 

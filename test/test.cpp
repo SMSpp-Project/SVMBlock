@@ -405,6 +405,75 @@ static double from_scratch( const SVMBlock * svm )
  }  // end( from_scratch )
 
 /*--------------------------------------------------------------------------*/
+/// trains a fresh SVMBlock holding the training problem of \p svm without i
+/** Trains, from scratch and with a Solver of its own, a new SVMBlock with the
+ * hyper-parameters of \p svm and its data set *minus* the sample \p i: this
+ * is the value that unlearning that sample has to give [see
+ * SMOSolver::unlearn()]. */
+
+static double without_sample( const SVMBlock * svm , Index i )
+{
+ auto ref = dynamic_cast< SVMBlock * >(
+                                  Block::new_Block( svm->classname() ) );
+
+ svm->copy_hyperparameters( ref );
+
+ const Index n = svm->get_NSamples() , m = svm->get_NFeatures();
+ doubleVec X , y;
+ X.reserve( std::size_t( n - 1 ) * m );
+ y.reserve( n - 1 );
+
+ for( Index k = 0 ; k < n ; ++k ) {
+  if( k == i )
+   continue;
+
+  y.push_back( svm->get_y()[ k ] );
+  for( Index j = 0 ; j < m ; ++j )
+   X.push_back( svm->get_X()[ std::size_t( k ) * m + j ] );
+  }
+
+ ref->load( n - 1 , m , X , y );
+
+ if( svm->has_linear_term() )
+  ref->set_linear_term( svm->get_linear_term() , svm->get_linear_bias() );
+
+ const double value = train( ref );
+
+ delete ref;
+ return( value );
+
+ }  // end( without_sample )
+
+/*--------------------------------------------------------------------------*/
+/// the sample of \p svm carrying the largest multiplier, and one carrying none
+/** Reads the multipliers of the solution \p svm holds and returns, in \p sv,
+ * the sample whose multipliers are the largest, i.e. a support vector, and in
+ * \p nsv one whose multipliers are all zero, i.e. a sample the model does not
+ * lean on; either is left at get_NSamples() if there is none. */
+
+static void find_support( const SVMBlock * svm , Index & sv , Index & nsv )
+{
+ const Index n = svm->get_NSamples();
+ doubleVec mass( n , 0 );
+
+ auto & a = svm->get_alphas();
+ auto & di = svm->get_dual_samples();
+
+ for( Index k = 0 ; k < a.size() ; ++k )
+  mass[ di[ k ] ] += std::abs( a[ k ] );
+
+ sv = nsv = n;
+ double top = 1e-8;
+
+ for( Index i = 0 ; i < n ; ++i )
+  if( mass[ i ] > top ) { top = mass[ i ]; sv = i; }
+  else
+   if( ( mass[ i ] <= 1e-12 ) && ( nsv == n ) )
+    nsv = i;
+
+ }  // end( find_support )
+
+/*--------------------------------------------------------------------------*/
 /// checks that a change is followed by the abstract representation
 /** Builds two SVMBlock of the given kind holding the same data set, and
  * subjects both to \p change: the first one after having generated its
@@ -1348,6 +1417,141 @@ int main( int argc , char ** argv )
   svm.set_C( 8 );
   check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
                "C increased" );
+
+  svm.unregister_Solver( solver );
+  delete solver;
+  }
+
+ /* The exact solution path: a sample is learnt by growing its multiplier
+  * from zero, and unlearnt by driving it back to zero, keeping every other
+  * one at its own optimality condition all along, so that what is left at
+  * the end is the exact solution of the problem with, or without, it. */
+
+ std::cout << "the exact solution path" << std::endl;
+ {
+  const Index n = 40 , m = 3;
+  doubleVec X , y;
+  make_svc_data( n , m , X , y , 23 );
+
+  SVCBlock svm;
+  svm.set_C( 1 );
+  svm.load( n , m , X , y );
+
+  auto solver = Solver::new_Solver( "SMOSolver" );
+  auto smo = dynamic_cast< SMOSolver * >( solver );
+  solver->set_par( SMOSolver::dblSMOTol , 1e-10 );
+  svm.register_Solver( solver );
+
+  double value = resolve( solver );
+
+  Index sv , nsv;
+  find_support( & svm , sv , nsv );
+  check( ( sv < n ) && ( nsv < n ) ,
+         "the solution has both a support vector and a sample it ignores" );
+
+  // a sample the model does not lean on is unlearnt for free
+  check( smo->unlearn( nsv ) == Solver::kOK ,
+         "a sample carrying no multiplier is unlearnt" );
+  check( ! smo->get_iter() , "which takes no event at all" );
+  check_close( smo->get_var_value() , value , 1e-10 ,
+               "and leaves the solution where it was" );
+
+  // a support vector is unlearnt by walking the path, and what is left is
+  // the solution of the problem that sample is not part of
+  check( smo->unlearn( sv ) == Solver::kOK , "a support vector is unlearnt" );
+  check( smo->get_iter() > 0 , "which does take events" );
+  check_close( smo->get_var_value() , without_sample( & svm , sv ) , 1e-8 ,
+               "and gives exactly the problem without it" );
+
+  // the sample is still in the SVMBlock, and a compute() brings it back
+  check_close( resolve( solver ) , value , 1e-8 ,
+               "the sample unlearnt is still there, and comes back" );
+
+  // the samples that are added are learnt along the path, and the path gets
+  // the answer the iteration gets
+  { doubleVec nX , ny;
+    make_svc_data( 5 , m , nX , ny , 61 );
+    svm.add_samples( 5 , nX , ny );
+    }
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "the samples added are learnt along the path" );
+
+  solver->set_par( SMOSolver::intSMOPath , 0 );
+  { doubleVec nX , ny;
+    make_svc_data( 5 , m , nX , ny , 62 );
+    svm.add_samples( 5 , nX , ny );
+    }
+  check_close( resolve( solver ) , from_scratch( & svm ) , 1e-8 ,
+               "and the same ones are learnt without it" );
+  solver->set_par( SMOSolver::intSMOPath , 1 );
+
+  // with the squared loss the multipliers have no upper bound, and with the
+  // bias regularised there is no equality constraint to keep: the walk is
+  // the same one in a different geometry
+  svm.set_squared_loss( true );
+  value = resolve( solver );
+  find_support( & svm , sv , nsv );
+  check( smo->unlearn( sv ) == Solver::kOK ,
+         "a support vector is unlearnt with the squared loss" );
+  check_close( smo->get_var_value() , without_sample( & svm , sv ) , 1e-8 ,
+               "and gives the problem without it" );
+  svm.set_squared_loss( false );
+
+  svm.set_reg_bias( true );
+  value = resolve( solver );
+  find_support( & svm , sv , nsv );
+  check( smo->unlearn( sv ) == Solver::kOK ,
+         "a support vector is unlearnt with the bias regularised" );
+  check_close( smo->get_var_value() , without_sample( & svm , sv ) , 1e-8 ,
+               "and gives the problem without it" );
+
+  // and it is the same walk with a kernel that is not the linear one
+  svm.set_reg_bias( false );
+  svm.set_kernel( SVMBlock::kGaussian , 0.5 );
+  value = resolve( solver );
+  find_support( & svm , sv , nsv );
+  check( smo->unlearn( sv ) == Solver::kOK ,
+         "a support vector is unlearnt with a nonlinear kernel" );
+  check_close( smo->get_var_value() , without_sample( & svm , sv ) , 1e-8 ,
+               "and gives the problem without it" );
+
+  svm.unregister_Solver( solver );
+  delete solver;
+  }
+
+ // the same on a regression problem, where a sample has two multipliers - - -
+ {
+  const Index n = 30 , m = 3;
+  doubleVec X , y;
+  make_svr_data( n , m , X , y , 29 );
+
+  SVRBlock svm;
+  svm.set_C( 2 );
+  svm.load( n , m , X , y );
+
+  auto solver = Solver::new_Solver( "SMOSolver" );
+  auto smo = dynamic_cast< SMOSolver * >( solver );
+  solver->set_par( SMOSolver::dblSMOTol , 1e-10 );
+  svm.register_Solver( solver );
+
+  const double value = resolve( solver );
+
+  Index sv , nsv;
+  find_support( & svm , sv , nsv );
+
+  check( smo->unlearn( sv ) == Solver::kOK ,
+         "a support vector of a regression is unlearnt" );
+  check_close( smo->get_var_value() , without_sample( & svm , sv ) , 1e-8 ,
+               "and gives the problem without it" );
+
+  if( nsv < n ) {
+   check( smo->unlearn( nsv ) == Solver::kOK ,
+          "a sample inside the tube is unlearnt" );
+   check( ! smo->get_iter() , "which takes no event" );
+   }
+
+  check_close( resolve( solver ) , value , 1e-8 ,
+               "and both come back when the problem is solved again" );
 
   svm.unregister_Solver( solver );
   delete solver;

@@ -561,6 +561,15 @@ class SMOSolver : public Solver
  int follow_path( Index c , double to );
 
 /*--------------------------------------------------------------------------*/
+ /// the value, and the bias, of the solution the path has left behind
+ /** Computes what the caller of a walk along the path has to report: the
+  * value of the dual at the multipliers it has left, and, when the bias is
+  * regularised and is therefore no multiplier of an equality constraint but
+  * one more component of the model, the bias itself. */
+
+ void path_solution( void );
+
+/*--------------------------------------------------------------------------*/
  /// the SMO iteration proper, for the dual with the equality constraint
 
  int solve_with_equality( void );
