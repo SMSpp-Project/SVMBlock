@@ -990,6 +990,14 @@ int SMOSolver::follow_path( Index c , double to )
   return( f_rb ? v_G[ k ] : v_G[ k ] + f_ds[ k ] * f_b );
   };
 
+ /* Whoever is pinned is not part of the problem the walk is in: its
+  * multiplier is zero and stays there, so it neither joins the margin nor
+  * stops anything [see unlearn( Subset )]. */
+
+ auto pin = [ this ]( Index k ) {
+  return( ( ! v_pin.empty() ) && v_pin[ f_di[ k ] ] );
+  };
+
  /* The margin set and the inverse of its system are kept across the events,
   * each of which changes the set by one index at most: they are computed
   * from the state only when the walk starts, when an update fails or when
@@ -1031,7 +1039,7 @@ int SMOSolver::follow_path( Index c , double to )
    in_S.assign( f_N , false );
 
    for( Index k = 0 ; k < f_N ; ++k ) {
-    if( k == c )
+    if( ( k == c ) || pin( k ) )
      continue;
 
     if( ( ( v_alpha[ k ] > dPEps ) && ( v_alpha[ k ] < f_u - dPEps ) ) ||
@@ -1055,7 +1063,7 @@ int SMOSolver::follow_path( Index c , double to )
    Index who = f_N;
 
    for( Index k = 0 ; k < f_N ; ++k ) {
-    if( k == c )
+    if( ( k == c ) || pin( k ) )
      continue;
 
     const double dh = f_ds[ k ] * bdir;   // how h_k moves per unit of bias
@@ -1178,7 +1186,7 @@ int SMOSolver::follow_path( Index c , double to )
    }
 
   for( Index k = 0 ; k < f_N ; ++k ) {   // an index reaching the margin
-   if( ( k == c ) || in_S[ k ] )
+   if( ( k == c ) || in_S[ k ] || pin( k ) )
     continue;
 
    const double dh = gof( k ) * dir;
@@ -1279,7 +1287,7 @@ void SMOSolver::path_solution( void )
 
 /*--------------------------------------------------------------------------*/
 
-int SMOSolver::unlearn( Index i )
+int SMOSolver::unlearn( const Subset & samples )
 {
  if( ! f_SVM )
   throw( std::logic_error( "SMOSolver::unlearn: no SVMBlock is set" ) );
@@ -1288,13 +1296,26 @@ int SMOSolver::unlearn( Index i )
   throw( std::logic_error( "SMOSolver::unlearn: there is no solution to "
                            "unlearn a sample from" ) );
 
- if( i >= f_n )
-  throw( std::invalid_argument( "SMOSolver::unlearn: no such sample" ) );
+ for( auto i : samples )
+  if( i >= f_n )
+   throw( std::invalid_argument( "SMOSolver::unlearn: no such sample" ) );
+
+ if( samples.empty() )
+  return( kOK );
 
  lock();
 
  f_iter = 0;
  int status = kOK;
+
+ /* The whole set is pinned before the first walk: a walk keeps every index
+  * that is not pinned at its own optimality condition, hence one that has
+  * been unlearnt already would be let back in as soon as its condition stops
+  * holding, and the problem without those samples cannot do that. */
+
+ v_pin.assign( f_n , false );
+ for( auto i : samples )
+  v_pin[ i ] = true;
 
  /* A sample has one multiplier in a classification problem and two in a
   * regression one, and at most one of the two is nonzero: each of them is
@@ -1302,8 +1323,10 @@ int SMOSolver::unlearn( Index i )
   */
 
  for( Index k = 0 ; ( k < f_N ) && ( status == kOK ) ; ++k )
-  if( f_di[ k ] == i )
+  if( v_pin[ f_di[ k ] ] )
    status = follow_path( k , 0 );
+
+ v_pin.clear();
 
  if( status == kOK ) {
   path_solution();
@@ -1324,6 +1347,66 @@ int SMOSolver::unlearn( Index i )
 
  }  // end( SMOSolver::unlearn )
 
+/*--------------------------------------------------------------------------*/
+
+int SMOSolver::relearn( const Subset & samples )
+{
+ if( ! f_SVM )
+  throw( std::logic_error( "SMOSolver::relearn: no SVMBlock is set" ) );
+
+ if( ! f_solved )
+  throw( std::logic_error( "SMOSolver::relearn: there is no solution to "
+                           "learn a sample into" ) );
+
+ for( auto i : samples )
+  if( i >= f_n )
+   throw( std::invalid_argument( "SMOSolver::relearn: no such sample" ) );
+
+ if( samples.empty() )
+  return( kOK );
+
+ lock();
+
+ f_iter = 0;
+ int status = kOK;
+
+ /* The set starts out pinned, as it is out of the problem, and each sample
+  * is unpinned right before its own multiplier is grown: the walk that puts
+  * one back must not see those that are still out. */
+
+ v_pin.assign( f_n , false );
+ for( auto i : samples )
+  v_pin[ i ] = true;
+
+ for( auto i : samples ) {
+  v_pin[ i ] = false;
+
+  for( Index k = 0 ; ( k < f_N ) && ( status == kOK ) ; ++k )
+   if( f_di[ k ] == i )
+    status = follow_path( k , f_u );
+
+  if( status != kOK )
+   break;
+  }
+
+ v_pin.clear();
+
+ if( status == kOK )
+  path_solution();
+ else
+  f_solved = false;
+
+ /* The solution is the one of the whole training problem again, but saying
+  * so is compute()'s business, which checks the conditions rather than
+  * trusting a walk of floating point numbers. */
+
+ f_optimal = false;
+
+ unlock();
+
+ return( status );
+
+ }  // end( SMOSolver::relearn )
 
 /*--------------------------------------------------------------------------*/
 

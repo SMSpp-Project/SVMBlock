@@ -386,7 +386,37 @@ class SMOSolver : public Solver
   * multipliers are feasible but they are not the solution asked for, and a
   * compute() puts things back in order. */
 
- int unlearn( Index i );
+ int unlearn( Index i ) { return( unlearn( Subset( 1 , i ) ) ); }
+
+/*--------------------------------------------------------------------------*/
+ /// unlearns a set of samples, leaving the solution optimal without them
+ /** Does for the whole set \p samples what unlearn( Index ) does for one, and
+  * it is not the same thing as calling that one for each of them: the samples
+  * of the set are *pinned* to zero for the whole of it, since a walk keeps
+  * every index that is not pinned at its own optimality condition and would
+  * therefore let one that has already been unlearnt back in, which the
+  * problem without them has no way of doing. Unlearning a whole fold of a
+  * cross-validation is exactly this. */
+
+ int unlearn( const Subset & samples );
+
+/*--------------------------------------------------------------------------*/
+ /// learns back the samples that unlearn() has taken out
+ /** Puts the samples \p samples back into the solution, which is the walk of
+  * unlearn( Subset ) taken in the opposite direction: the multiplier of each
+  * of them in turn is grown from zero until its own optimality condition
+  * holds, the ones that are not back yet being pinned to zero meanwhile, so
+  * that what is left at the end is the solution of the training problem the
+  * SVMBlock describes, all of its samples included.
+  *
+  * This is what makes a cross-validation cost walks only: the fold that has
+  * been scored is put back this way rather than by re-optimizing, which
+  * would be a training in all but name. \p samples must be the set a
+  * previous unlearn() has taken out, and nothing must have changed in
+  * between. Returns kOK if the path has been followed and kError if it could
+  * not be, in which case a compute() puts things back in order. */
+
+ int relearn( const Subset & samples );
 
 /*--------------------------------------------------------------------------*/
  /// returns the number of iterations of the last call to compute()
@@ -723,6 +753,12 @@ class SMOSolver : public Solver
   * add_to_free_system() and rmv_from_free_system()]. Its first slot is the
   * border row of the equality constraint, when there is one, and the others
   * are the margin set in its own order. */
+
+ /* The samples that a walk may not give a multiplier back to, i.e., those
+  * that are being unlearnt: indexed by sample, empty when nothing is pinned,
+  * which is what every walk but unlearn()'s is. */
+
+ std::vector< bool > v_pin;
 
  doubleVec v_R;          ///< the inverse of the matrix of the free system
  Index f_Rdim = 0;       ///< the order of that matrix

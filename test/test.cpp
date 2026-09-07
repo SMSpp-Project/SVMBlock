@@ -63,6 +63,7 @@ using namespace SMSpp_di_unipi_it;
 
 using Index = Block::Index;
 using doubleVec = SVMBlock::doubleVec;
+using Subset = Block::Subset;
 
 /*--------------------------------------------------------------------------*/
 /*------------------------------- GLOBALS ----------------------------------*/
@@ -405,13 +406,13 @@ static double from_scratch( const SVMBlock * svm )
  }  // end( from_scratch )
 
 /*--------------------------------------------------------------------------*/
-/// trains a fresh SVMBlock holding the training problem of \p svm without i
+/// trains a fresh SVMBlock holding the training problem of \p svm without \p out
 /** Trains, from scratch and with a Solver of its own, a new SVMBlock with the
- * hyper-parameters of \p svm and its data set *minus* the sample \p i: this
- * is the value that unlearning that sample has to give [see
+ * hyper-parameters of \p svm and its data set *minus* the samples \p out:
+ * this is the value that unlearning them has to give [see
  * SMOSolver::unlearn()]. */
 
-static double without_sample( const SVMBlock * svm , Index i )
+static double without_samples( const SVMBlock * svm , const Subset & out )
 {
  auto ref = dynamic_cast< SVMBlock * >(
                                   Block::new_Block( svm->classname() ) );
@@ -420,11 +421,11 @@ static double without_sample( const SVMBlock * svm , Index i )
 
  const Index n = svm->get_NSamples() , m = svm->get_NFeatures();
  doubleVec X , y;
- X.reserve( std::size_t( n - 1 ) * m );
- y.reserve( n - 1 );
+ X.reserve( std::size_t( n - out.size() ) * m );
+ y.reserve( n - out.size() );
 
  for( Index k = 0 ; k < n ; ++k ) {
-  if( k == i )
+  if( std::find( out.begin() , out.end() , k ) != out.end() )
    continue;
 
   y.push_back( svm->get_y()[ k ] );
@@ -432,7 +433,7 @@ static double without_sample( const SVMBlock * svm , Index i )
    X.push_back( svm->get_X()[ std::size_t( k ) * m + j ] );
   }
 
- ref->load( n - 1 , m , X , y );
+ ref->load( n - out.size() , m , X , y );
 
  if( svm->has_linear_term() )
   ref->set_linear_term( svm->get_linear_term() , svm->get_linear_bias() );
@@ -442,7 +443,7 @@ static double without_sample( const SVMBlock * svm , Index i )
  delete ref;
  return( value );
 
- }  // end( without_sample )
+ }  // end( without_samples )
 
 /*--------------------------------------------------------------------------*/
 /// the sample of \p svm carrying the largest multiplier, and one carrying none
@@ -1460,7 +1461,7 @@ int main( int argc , char ** argv )
   // the solution of the problem that sample is not part of
   check( smo->unlearn( sv ) == Solver::kOK , "a support vector is unlearnt" );
   check( smo->get_iter() > 0 , "which does take events" );
-  check_close( smo->get_var_value() , without_sample( & svm , sv ) , 1e-8 ,
+  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) , 1e-8 ,
                "and gives exactly the problem without it" );
 
   // the sample is still in the SVMBlock, and a compute() brings it back
@@ -1493,7 +1494,7 @@ int main( int argc , char ** argv )
   find_support( & svm , sv , nsv );
   check( smo->unlearn( sv ) == Solver::kOK ,
          "a support vector is unlearnt with the squared loss" );
-  check_close( smo->get_var_value() , without_sample( & svm , sv ) , 1e-8 ,
+  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) , 1e-8 ,
                "and gives the problem without it" );
   svm.set_squared_loss( false );
 
@@ -1502,7 +1503,7 @@ int main( int argc , char ** argv )
   find_support( & svm , sv , nsv );
   check( smo->unlearn( sv ) == Solver::kOK ,
          "a support vector is unlearnt with the bias regularised" );
-  check_close( smo->get_var_value() , without_sample( & svm , sv ) , 1e-8 ,
+  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) , 1e-8 ,
                "and gives the problem without it" );
 
   // and it is the same walk with a kernel that is not the linear one
@@ -1512,8 +1513,69 @@ int main( int argc , char ** argv )
   find_support( & svm , sv , nsv );
   check( smo->unlearn( sv ) == Solver::kOK ,
          "a support vector is unlearnt with a nonlinear kernel" );
-  check_close( smo->get_var_value() , without_sample( & svm , sv ) , 1e-8 ,
+  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) , 1e-8 ,
                "and gives the problem without it" );
+
+  svm.unregister_Solver( solver );
+  delete solver;
+  }
+
+ /* A whole fold, which is what a cross-validation takes out, and back in.
+  * The set has to go out in ONE call: unlearning its samples one by one
+  * would let each walk give a multiplier back to one that a previous walk
+  * has already unlearnt, since a walk keeps at its own condition every index
+  * that is not pinned, and the model of the other folds cannot do that. */
+
+ {
+  const Index n = 60 , m = 4;
+  doubleVec X , y;
+  make_svc_data( n , m , X , y , 17 );
+
+  SVCBlock svm;
+  svm.set_C( 1 );
+  svm.load( n , m , X , y );
+
+  auto solver = Solver::new_Solver( "SMOSolver" );
+  auto smo = dynamic_cast< SMOSolver * >( solver );
+  solver->set_par( SMOSolver::dblSMOTol , 1e-10 );
+  svm.register_Solver( solver );
+
+  const double value = resolve( solver );
+
+  Subset fold;              // every third sample, of both classes
+  for( Index i = 0 ; i < n ; i += 3 )
+   fold.push_back( i );
+
+  check( smo->unlearn( fold ) == Solver::kOK , "a whole fold is unlearnt" );
+  check_close( smo->get_var_value() , without_samples( & svm , fold ) , 1e-8 ,
+               "and gives exactly the problem without those samples" );
+
+  { // no sample of the fold carries a multiplier any more
+    solver->get_var_solution();
+    double most = 0;
+    for( Index k = 0 ; k < svm.get_NDual() ; ++k )
+     if( std::find( fold.begin() , fold.end() , svm.get_dual_samples()[ k ] )
+         != fold.end() )
+      most = std::max( most , std::abs( svm.get_alphas()[ k ] ) );
+
+    check( most <= 1e-9 , "and none of them is back in the model" );
+    }
+
+  check( smo->relearn( fold ) == Solver::kOK , "the fold is learnt back" );
+  check_close( smo->get_var_value() , value , 1e-8 ,
+               "and the solution is the one of all the samples again" );
+
+  // the same with a kernel that is not the linear one
+  svm.set_kernel( SVMBlock::kGaussian , 0.5 );
+  const double gvalue = resolve( solver );
+
+  check( smo->unlearn( fold ) == Solver::kOK ,
+         "a fold is unlearnt with a nonlinear kernel" );
+  check_close( smo->get_var_value() , without_samples( & svm , fold ) , 1e-8 ,
+               "and gives the problem without those samples" );
+  check( smo->relearn( fold ) == Solver::kOK , "and is learnt back" );
+  check_close( smo->get_var_value() , gvalue , 1e-8 ,
+               "leaving the solution of all of them" );
 
   svm.unregister_Solver( solver );
   delete solver;
@@ -1541,7 +1603,7 @@ int main( int argc , char ** argv )
 
   check( smo->unlearn( sv ) == Solver::kOK ,
          "a support vector of a regression is unlearnt" );
-  check_close( smo->get_var_value() , without_sample( & svm , sv ) , 1e-8 ,
+  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) , 1e-8 ,
                "and gives the problem without it" );
 
   if( nsv < n ) {
