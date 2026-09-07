@@ -695,6 +695,205 @@ bool SMOSolver::restore_equality( void )
  * max { g_i : i in I_up } <= min { g_j : j in I_low } with g_k = - s_k G_k
  * and b the common value at optimality. */
 
+bool SMOSolver::factor_free_system( const Subset & S )
+{
+ const Index nb = f_rb ? 0 : 1;   // the border row, if there is an equality
+ const Index dim = S.size() + nb;
+
+ f_Rdim = dim;
+ f_Rupd = 0;
+ v_R.assign( dim * dim , 0 );
+
+ if( ! dim )   // nothing moves with c, and nothing has to
+  return( true );
+
+ /* The matrix, the border row first and the margin set after it, and the
+  * identity beside it: the elimination turns the first into the identity and
+  * the second into the inverse. */
+
+ doubleVec A( dim * dim , 0 );
+
+ for( Index i = 0 ; i < S.size() ; ++i ) {
+  for( Index j = 0 ; j < S.size() ; ++j )
+   A[ ( i + nb ) * dim + j + nb ] = Q( S[ i ] , S[ j ] );
+
+  if( nb ) {
+   A[ ( i + nb ) * dim ] = f_ds[ S[ i ] ];
+   A[ i + nb ] = f_ds[ S[ i ] ];
+   }
+  }
+
+ for( Index i = 0 ; i < dim ; ++i )
+  v_R[ i * dim + i ] = 1;
+
+ // Gauss-Jordan elimination with partial pivoting - - - - - - - - - - - - -
+
+ for( Index k = 0 ; k < dim ; ++k ) {
+  Index p = k;
+  for( Index i = k + 1 ; i < dim ; ++i )
+   if( std::abs( A[ i * dim + k ] ) > std::abs( A[ p * dim + k ] ) )
+    p = i;
+
+  if( std::abs( A[ p * dim + k ] ) < 1e-12 )
+   return( false );   // singular: the path cannot be followed from here
+
+  if( p != k )
+   for( Index j = 0 ; j < dim ; ++j ) {
+    std::swap( A[ p * dim + j ] , A[ k * dim + j ] );
+    std::swap( v_R[ p * dim + j ] , v_R[ k * dim + j ] );
+    }
+
+  const double pv = A[ k * dim + k ];
+  for( Index j = 0 ; j < dim ; ++j ) {
+   A[ k * dim + j ] /= pv;
+   v_R[ k * dim + j ] /= pv;
+   }
+
+  for( Index i = 0 ; i < dim ; ++i ) {
+   if( i == k )
+    continue;
+
+   const double f = A[ i * dim + k ];
+   if( ! f )
+    continue;
+
+   for( Index j = 0 ; j < dim ; ++j ) {
+    A[ i * dim + j ] -= f * A[ k * dim + j ];
+    v_R[ i * dim + j ] -= f * v_R[ k * dim + j ];
+    }
+   }
+  }
+
+ return( true );
+
+ }  // end( SMOSolver::factor_free_system )
+
+/*--------------------------------------------------------------------------*/
+
+bool SMOSolver::add_to_free_system( const Subset & S , Index k )
+{
+ const Index nb = f_rb ? 0 : 1;
+ const Index dim = f_Rdim;        // the order S and the border make up
+
+ // the column of k against the system as it is, and R times it - - - - - - -
+
+ doubleVec u( dim );
+ if( nb )
+  u[ 0 ] = f_ds[ k ];
+
+ for( Index i = 0 ; i < S.size() ; ++i )
+  u[ i + nb ] = Q( S[ i ] , k );
+
+ doubleVec v( dim );
+ for( Index i = 0 ; i < dim ; ++i ) {
+  double vi = 0;
+  for( Index j = 0 ; j < dim ; ++j )
+   vi += v_R[ i * dim + j ] * u[ j ];
+
+  v[ i ] = vi;
+  }
+
+ double gamma = Q( k , k );
+ for( Index i = 0 ; i < dim ; ++i )
+  gamma -= u[ i ] * v[ i ];
+
+ if( std::abs( gamma ) < 1e-12 )
+  return( false );   // the extended matrix is singular
+
+ // the bordering formula- - - - - - - - - - - - - - - - - - - - - - - - - -
+
+ const Index nd = dim + 1;
+ doubleVec R( nd * nd );
+
+ for( Index i = 0 ; i < dim ; ++i ) {
+  for( Index j = 0 ; j < dim ; ++j )
+   R[ i * nd + j ] = v_R[ i * dim + j ] + v[ i ] * v[ j ] / gamma;
+
+  R[ i * nd + dim ] = R[ dim * nd + i ] = - v[ i ] / gamma;
+  }
+
+ R[ dim * nd + dim ] = 1 / gamma;
+
+ v_R = std::move( R );
+ f_Rdim = nd;
+ ++f_Rupd;
+
+ return( true );
+
+ }  // end( SMOSolver::add_to_free_system )
+
+/*--------------------------------------------------------------------------*/
+
+bool SMOSolver::rmv_from_free_system( Index p )
+{
+ const Index dim = f_Rdim;
+ const double pv = v_R[ p * dim + p ];
+
+ if( std::abs( pv ) < 1e-12 )
+  return( false );
+
+ const Index nd = dim - 1;
+ doubleVec R( nd * nd );
+
+ for( Index i = 0 , ii = 0 ; i < dim ; ++i ) {
+  if( i == p )
+   continue;
+
+  for( Index j = 0 , jj = 0 ; j < dim ; ++j ) {
+   if( j == p )
+    continue;
+
+   R[ ii * nd + jj ] = v_R[ i * dim + j ]
+                       - ( v_R[ i * dim + p ] * v_R[ p * dim + j ] ) / pv;
+   ++jj;
+   }
+
+  ++ii;
+  }
+
+ v_R = std::move( R );
+ f_Rdim = nd;
+ ++f_Rupd;
+
+ return( true );
+
+ }  // end( SMOSolver::rmv_from_free_system )
+
+/*--------------------------------------------------------------------------*/
+
+void SMOSolver::apply_free_inverse( const Subset & S , Index c ,
+                                    doubleVec & beta , double & beta_b ) const
+{
+ const Index nb = f_rb ? 0 : 1;
+ const Index dim = f_Rdim;
+
+ beta.assign( S.size() , 0 );
+ beta_b = 0;
+
+ if( ! dim )
+  return;
+
+ doubleVec r( dim );
+ if( nb )
+  r[ 0 ] = - f_ds[ c ];
+
+ for( Index i = 0 ; i < S.size() ; ++i )
+  r[ i + nb ] = - Q( S[ i ] , c );
+
+ for( Index i = 0 ; i < dim ; ++i ) {
+  double x = 0;
+  for( Index j = 0 ; j < dim ; ++j )
+   x += v_R[ i * dim + j ] * r[ j ];
+
+  if( i < nb )
+   beta_b = x;
+  else
+   beta[ i - nb ] = x;
+  }
+ }  // end( SMOSolver::apply_free_inverse )
+
+/*--------------------------------------------------------------------------*/
+
 bool SMOSolver::solve_free_system( const Subset & S , Index c ,
                                    doubleVec & beta , double & beta_b ) const
 {
@@ -791,6 +990,19 @@ int SMOSolver::follow_path( Index c , double to )
   return( f_rb ? v_G[ k ] : v_G[ k ] + f_ds[ k ] * f_b );
   };
 
+ /* The margin set and the inverse of its system are kept across the events,
+  * each of which changes the set by one index at most: they are computed
+  * from the state only when the walk starts, when an update fails or when
+  * one has been done often enough for its error to be worth wiping out. */
+
+ Subset S;
+ std::vector< bool > in_S( f_N , false );
+ bool refactor = true;   // the margin set has to be read off the state
+ bool haveR = false;     // the inverse is there and matches the margin set
+ Index taken = 0;        // the events this walk has taken
+ doubleVec beta;
+ double beta_b = 0;
+
  for( Index ev = 0 ; ev < maxev ; ++ev ) {
 
   // where the multiplier of c has to go, and whether it is there already- -
@@ -814,22 +1026,24 @@ int SMOSolver::follow_path( Index c , double to )
    * are on the margin exactly as the former, they simply cannot leave their
    * bound on the wrong side, which is what the pruning below sees to. */
 
-  std::vector< bool > in_S( f_N , false );
-  Subset S;
+  if( refactor ) {
+   S.clear();
+   in_S.assign( f_N , false );
 
-  for( Index k = 0 ; k < f_N ; ++k ) {
-   if( k == c )
-    continue;
+   for( Index k = 0 ; k < f_N ; ++k ) {
+    if( k == c )
+     continue;
 
-   if( ( ( v_alpha[ k ] > dPEps ) && ( v_alpha[ k ] < f_u - dPEps ) ) ||
-       ( std::abs( hof( k ) ) <= dPEps ) ) {
-    in_S[ k ] = true;
-    S.push_back( k );
+    if( ( ( v_alpha[ k ] > dPEps ) && ( v_alpha[ k ] < f_u - dPEps ) ) ||
+        ( std::abs( hof( k ) ) <= dPEps ) ) {
+     in_S[ k ] = true;
+     S.push_back( k );
+     }
     }
-   }
 
-  doubleVec beta;
-  double beta_b = 0;
+   refactor = false;
+   haveR = false;
+   }
 
   if( S.empty() && ( ! f_rb ) ) {
    /* No multiplier can absorb the movement of c and keep s^T alpha where it
@@ -863,6 +1077,7 @@ int SMOSolver::follow_path( Index c , double to )
     return( kError );
 
    f_b += bdir * mag;
+   refactor = true;   // whoever has stopped it is on the margin now
    continue;
    }
 
@@ -870,11 +1085,23 @@ int SMOSolver::follow_path( Index c , double to )
    * after all: it leaves and the direction is computed again, which can only
    * happen as many times as there are indices on it. */
 
-  for( ; ; ) {
-   if( ! solve_free_system( S , c , beta , beta_b ) )
-    return( kError );
+  const Index nb = f_rb ? 0 : 1;   // the slot the border takes up
 
-   Subset kept;
+  /* From the second event on, the walk carries the inverse of the system and
+   * follows the margin set with rank-one updates: building it costs more
+   * than one solve, hence a walk that ends at its first event never does. */
+
+  if( taken && ( ! haveR ) )
+   haveR = factor_free_system( S );
+
+  for( ; ; ) {
+   if( haveR )
+    apply_free_inverse( S , c , beta , beta_b );
+   else
+    if( ! solve_free_system( S , c , beta , beta_b ) )
+     return( kError );
+
+   Subset kept , gone;
    kept.reserve( S.size() );
 
    for( Index i = 0 ; i < S.size() ; ++i ) {
@@ -884,16 +1111,30 @@ int SMOSolver::follow_path( Index c , double to )
     if( ( ( v_alpha[ k ] <= dPEps ) && ( db < - dPZero ) ) ||
         ( ( v_alpha[ k ] >= f_u - dPEps ) && ( db > dPZero ) ) ) {
      in_S[ k ] = false;
+     gone.push_back( i + nb );
      continue;
      }
 
     kept.push_back( k );
     }
 
-   if( kept.size() == S.size() )
+   if( gone.empty() )
     break;
 
+   // dropped from the last on, so that the slots before it do not move
+   bool ok = true;
+   if( haveR )
+    for( Index i = gone.size() ; i-- > 0 ; )
+     if( ! rmv_from_free_system( gone[ i ] ) ) {
+      ok = false;
+      break;
+      }
+
    S = std::move( kept );
+
+   if( ! ok )
+    if( ! ( haveR = factor_free_system( S ) ) )
+     return( kError );
    }
 
   /* The direction in which the whole state moves: the multipliers of the
@@ -982,9 +1223,29 @@ int SMOSolver::follow_path( Index c , double to )
    snap( who );
 
   ++f_iter;
+  ++taken;
 
   if( what == 1 )   // c is on the margin: nothing more is asked of it
    return( kOK );
+
+  /* The index that has reached the margin joins the margin set, and the
+   * inverse follows it with a rank-one update; the one that has reached a
+   * bound stays, its own condition holding there with equality, and leaves
+   * only when the direction would push it out, which the pruning sees to.
+   * The inverse is computed again from scratch every so many updates, so
+   * that what each of them loses in accuracy does not pile up. */
+
+  if( what == 3 ) {
+   if( haveR && ( ! add_to_free_system( S , who ) ) )
+    refactor = true;
+   else {
+    S.push_back( who );
+    in_S[ who ] = true;
+    }
+   }
+
+  if( haveR && ( f_Rupd > 2 * f_Rdim + 20 ) )
+   haveR = factor_free_system( S );
   }
 
  return( kError );   // the path did not end where it should have
@@ -1062,6 +1323,7 @@ int SMOSolver::unlearn( Index i )
  return( status );
 
  }  // end( SMOSolver::unlearn )
+
 
 /*--------------------------------------------------------------------------*/
 

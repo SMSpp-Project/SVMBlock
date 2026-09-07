@@ -511,6 +511,46 @@ class SMOSolver : public Solver
  void restore_order( void );
 
 /*--------------------------------------------------------------------------*/
+ /// computes the inverse of the matrix of the free system from scratch
+ /** Computes, by Gauss-Jordan elimination with partial pivoting, the inverse
+  * of the matrix of the system that says how the multipliers of the *free*
+  * dual indices \p S and the bias move [see solve_free_system()]. The border
+  * row of the equality constraint, when there is one, is the FIRST of the
+  * system, so that an index that joins the margin is appended at its end and
+  * the update has nothing to shift. Returns false if the matrix is singular,
+  * in which case the path cannot be followed from where it is. */
+
+ bool factor_free_system( const Subset & S );
+
+/*--------------------------------------------------------------------------*/
+ /// extends the inverse of the free system with the dual index \p k
+ /** Extends the inverse of the matrix of the free system, which \p S is the
+  * margin set of, with the dual index \p k that has just reached the margin,
+  * by the bordering formula
+  * \f[
+  *    \gamma = Q_{kk} - u^T R u \quad , \quad v = R u
+  * \f]
+  * with \f$ u \f$ the column of \p k against the system as it is: the new
+  * inverse is \f$ R + v v^T / \gamma \f$ bordered by \f$ - v / \gamma \f$
+  * and \f$ 1 / \gamma \f$, which costs the square of the order of the system
+  * rather than its cube. Returns false if \f$ \gamma \f$ is too small to
+  * divide by, i.e. if the extended matrix is singular, in which case the
+  * caller computes the inverse again from scratch. */
+
+ bool add_to_free_system( const Subset & S , Index k );
+
+/*--------------------------------------------------------------------------*/
+ /// drops the slot \p p out of the inverse of the free system
+ /** Drops the slot \p p, i.e. the row and the column of one dual index that
+  * has left the margin, out of the inverse of the matrix of the free system,
+  * by the counterpart of the bordering formula
+  * \f$ R_{ij} - R_{ip} R_{pj} / R_{pp} \f$. Returns false if
+  * \f$ R_{pp} \f$ is too small to divide by, in which case the caller
+  * computes the inverse again from scratch. */
+
+ bool rmv_from_free_system( Index p );
+
+/*--------------------------------------------------------------------------*/
  /// how the free multipliers and the bias react to the multiplier of c
  /** Solves the system that says how the multipliers of the *free* dual
   * indices \p S and the bias have to move, per unit of movement of the
@@ -522,15 +562,25 @@ class SMOSolver : public Solver
   * \f]
   * The system is (|S|+1) x (|S|+1), or |S| x |S| when the bias is
   * regularised and there is no equality constraint, and is solved by plain
-  * Gaussian elimination with partial pivoting: |S| is the number of margin
-  * support vectors, hence small, and re-solving it at each event of the path
-  * costs much less than what the rank-one updates of [Cauwenberghs and
-  * Poggio] would cost in code. Returns false if the system is singular, in
-  * which case the path cannot be followed and the caller falls back on the
-  * iteration. */
+  * Gaussian elimination with partial pivoting. This is what a walk that
+  * takes ONE event costs, and what it has to keep costing: computing the
+  * inverse, which is what makes every event after the first one cheap [see
+  * apply_free_inverse()], costs more than one solve, hence it is not done
+  * until the walk has proved to be a long one. Returns false if the system
+  * is singular, in which case the path cannot be followed from here. */
 
  bool solve_free_system( const Subset & S , Index c , doubleVec & beta ,
                          double & beta_b ) const;
+
+/*--------------------------------------------------------------------------*/
+ /// the same, read off the inverse the walk is carrying
+ /** Gives what solve_free_system() gives, as the product of the inverse of
+  * the matrix of the system by the right-hand side: \p S must be the margin
+  * set the inverse has been built on and followed with [see
+  * factor_free_system()]. */
+
+ void apply_free_inverse( const Subset & S , Index c , doubleVec & beta ,
+                          double & beta_b ) const;
 
 /*--------------------------------------------------------------------------*/
  /// moves the multiplier of c to \p to along the exact solution path
@@ -666,6 +716,17 @@ class SMOSolver : public Solver
  /// the dual indices that have no multiplier coming from the previous data
  /// set, i.e., those the incremental path has to learn [see compute()]
  Subset v_new;
+
+ /* The inverse of the matrix of the free system, kept between the events of
+  * a walk: at an event the margin set changes by one index, and the inverse
+  * follows it with a rank-one update rather than being computed again [see
+  * add_to_free_system() and rmv_from_free_system()]. Its first slot is the
+  * border row of the equality constraint, when there is one, and the others
+  * are the margin set in its own order. */
+
+ doubleVec v_R;          ///< the inverse of the matrix of the free system
+ Index f_Rdim = 0;       ///< the order of that matrix
+ Index f_Rupd = 0;       ///< rank-one updates since it was computed
 
  bool f_rmvd = false;    ///< true if samples have been removed, not only added
  bool f_optimal = false; ///< true if the last call to compute() found the optimum
