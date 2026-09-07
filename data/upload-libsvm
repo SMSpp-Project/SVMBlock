@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+cd ../..
+bash upload-to-package-registry SVMBlock/data/libsvm.tgz

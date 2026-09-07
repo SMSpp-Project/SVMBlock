@@ -138,6 +138,49 @@ if (BUILD_TESTING)
     add_subdirectory(test)
 endif ()
 
+# ----- Custom commands and targets ----------------------------------------- #
+
+# Download libsvm.tgz from GitLab Package Registry if it doesn't exist: the
+# data sets of the LIBSVM repository, in the sparse text format that
+# SVMBlock::load( istream , 'l' ) reads, which the batches of tests/SVMBlock
+# run on
+set(DATA_URL "https://gitlab.com/api/v4/projects/85124108/packages/generic/libsvm/latest/libsvm.tgz")
+set(DATA_ARCHIVE ${CMAKE_CURRENT_SOURCE_DIR}/data/libsvm.tgz)
+set(DATA_SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/download_svm_libsvm.cmake)
+
+file(WRITE ${DATA_SCRIPT} "
+file(DOWNLOAD \"${DATA_URL}\" \"${DATA_ARCHIVE}\" SHOW_PROGRESS)
+")
+
+add_custom_command(
+        OUTPUT ${DATA_ARCHIVE}
+        COMMAND ${CMAKE_COMMAND} -E echo "Downloading libsvm.tgz from GitLab Package Registry..."
+        COMMAND ${CMAKE_COMMAND} -P ${DATA_SCRIPT}
+        COMMENT "Downloading libsvm.tgz"
+        VERBATIM
+)
+
+add_custom_target(download_svm_libsvm
+        DEPENDS ${DATA_ARCHIVE})
+
+# Custom command to extract the libsvm.tgz archive if the .extracted file does
+# not exist
+add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/data/.extracted
+        COMMAND tar xzf ${CMAKE_CURRENT_SOURCE_DIR}/data/libsvm.tgz
+        COMMAND echo > ${CMAKE_CURRENT_SOURCE_DIR}/data/.extracted
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/data
+        COMMENT "Extracting libsvm.tgz"
+        VERBATIM
+        DEPENDS download_svm_libsvm)
+
+# Create custom targets to run the data extraction
+add_custom_target(extract_svm_libsvm
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/data/.extracted)
+
+# Ensure that extract_svm_libsvm is executed after the download
+add_dependencies(extract_svm_libsvm download_svm_libsvm)
+
 # ----- Install instructions ------------------------------------------------ #
 # The following commands are used when installing the library
 # and its CMake configuration files on the system.

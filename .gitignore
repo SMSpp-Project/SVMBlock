@@ -63,3 +63,9 @@ ehthumbs.db
 .directory
 .fuse_hidden*
 .nfs*
+
+# --- Project-specific ---------------------------------------
+# the LIBSVM data sets (downloaded/extracted on demand)
+data/libsvm
+data/libsvm.tgz
+data/.extracted

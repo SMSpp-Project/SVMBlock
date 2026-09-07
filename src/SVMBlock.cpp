@@ -18,6 +18,8 @@
 
 #include "SVMBlock.h"
 
+#include <sstream>
+
 #include "AbstractBlock.h"
 
 #include "ColRowSolution.h"
@@ -131,6 +133,11 @@ void SVMBlock::load( std::istream & input , char frmt )
 {
  static const std::string _prfx = "SVMBlock::load: ";
 
+ if( frmt == 'l' ) {
+  load_sparse( input );
+  return;
+  }
+
  if( frmt )
   throw( std::invalid_argument( _prfx + "unsupported format" ) );
 
@@ -157,6 +164,66 @@ void SVMBlock::load( std::istream & input , char frmt )
  load( n , m , std::move( X ) , std::move( y ) );
 
  }  // end( SVMBlock::load( istream ) )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::load_sparse( std::istream & input )
+{
+ static const std::string _prfx = "SVMBlock::load: ";
+
+ /* One line per sample, the target followed by the "index:value" pairs of the
+  * nonzero features: the file is read once into a list of pairs, since the
+  * number of features is only known when it ends, and then expanded. */
+
+ std::vector< std::vector< std::pair< Index , double > > > rows;
+ doubleVec y;
+ Index m = 0;
+
+ for( std::string line ; std::getline( input , line ) ; ) {
+  // whatever follows a '#' is a comment, and an empty line is not a sample
+  if( auto h = line.find( '#' ) ; h != std::string::npos )
+   line.erase( h );
+
+  std::istringstream ln( line );
+
+  double target;
+  if( ! ( ln >> target ) )
+   continue;
+
+  std::vector< std::pair< Index , double > > row;
+
+  for( std::string tok ; ln >> tok ; ) {
+   const auto colon = tok.find( ':' );
+   if( colon == std::string::npos )
+    throw( std::invalid_argument( _prfx + "malformed entry '" + tok +
+                                  "' in the sparse format" ) );
+
+   const auto idx = Index( std::stoul( tok.substr( 0 , colon ) ) );
+   if( ! idx )
+    throw( std::invalid_argument( _prfx + "the feature indices of the sparse "
+                                  "format are 1-based" ) );
+
+   row.emplace_back( idx - 1 , std::stod( tok.substr( colon + 1 ) ) );
+   m = std::max( m , idx );
+   }
+
+  rows.push_back( std::move( row ) );
+  y.push_back( target );
+  }
+
+ if( y.empty() )
+  throw( std::invalid_argument( _prfx + "no sample in the input" ) );
+
+ const Index n = y.size();
+
+ doubleVec X( std::size_t( n ) * m , 0 );
+ for( Index i = 0 ; i < n ; ++i )
+  for( auto & [ j , v ] : rows[ i ] )
+   X[ std::size_t( i ) * m + j ] = v;
+
+ load( n , m , std::move( X ) , std::move( y ) );
+
+ }  // end( SVMBlock::load_sparse )
 
 /*--------------------------------------------------------------------------*/
 

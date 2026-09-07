@@ -311,13 +311,33 @@ class SVMBlock : public Block
 
 /*--------------------------------------------------------------------------*/
  /// loads the SVMBlock out of an istream
- /** Loads the SVMBlock out of an istream. The only supported format (frmt ==
-  * 0) is the "dense" text one: the two integers n and m, followed by n rows
-  * of m + 1 numbers each, the first m being the features of the sample and
-  * the last one its target. Whitespace is irrelevant. The hyper-parameters
-  * are not part of the format and are left untouched. */
+ /** Loads the SVMBlock out of an istream in one of two formats, both text
+  * ones, the hyper-parameters being part of neither and therefore left
+  * untouched:
+  *
+  * - frmt == 0, the "dense" one: the two integers n and m, followed by n rows
+  *   of m + 1 numbers each, the first m being the features of the sample and
+  *   the last one its target; whitespace is irrelevant;
+  *
+  * - frmt == 'l', the "sparse" one of LIBSVM, which is what the data sets
+  *   that are distributed for benchmarking come in: one line per sample,
+  *   holding its target followed by the pairs "index:value" of its nonzero
+  *   features, with the indices 1-based and in increasing order. The number
+  *   of features is the largest index that appears, the samples being stored
+  *   dense all the same [see get_X()]: a data set with many features and few
+  *   nonzeroes per sample is therefore read, but it is not stored the way it
+  *   would deserve. */
 
  void load( std::istream & input , char frmt = 0 ) override;
+
+/*--------------------------------------------------------------------------*/
+ /// loads the SVMBlock out of an istream in the sparse format of LIBSVM
+ /** The guts of load( istream , 'l' ): reads the file once into a list of
+  * (index, value) pairs, the number of features being the largest index that
+  * appears and therefore known only when the input ends, and then expands it
+  * into the dense storage of the SVMBlock. */
+
+ void load_sparse( std::istream & input );
 
 /*--------------------------------------------------------------------------*/
  /// extends Block::deserialize( netCDF::NcGroup )
