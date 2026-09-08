@@ -44,6 +44,8 @@
 
 #include <map>
 
+#include <mutex>
+
 #include <numeric>
 
 #include <thread>
@@ -1639,7 +1641,10 @@ SVMBlock::c_doubleVec & SVMBlock::get_K( void ) const
  /* One row per iteration, each writing the upper part of its own row and the
   * corresponding part of the symmetric column, so that every entry is written
   * exactly once. The rows have very different lengths, whence the dynamic
-  * scheduling; a small data set is not worth a thread, and is done here. */
+  * scheduling; a small data set is not worth a thread, and is done here. How
+  * many threads is decided by the data set and not by the machine alone: one
+  * every dParallelK rows, since on a machine with hundreds of cores starting
+  * them all costs more than filling the matrix does. */
  const std::size_t n = f_n;
  auto row = [ this , n ]( const long i ) {
   v_K[ std::size_t( i ) * n + i ] = kernel( Index( i ) , Index( i ) );
@@ -1650,11 +1655,25 @@ SVMBlock::c_doubleVec & SVMBlock::get_K( void ) const
    }
   };
 
- const unsigned nthreads = ( f_n >= dParallelK )
-  ? std::max< unsigned >( 1 , std::thread::hardware_concurrency() ) : 1;
+ const unsigned ncores = std::max< unsigned >( 1 ,
+					std::thread::hardware_concurrency() );
+ const unsigned nthreads = std::max< unsigned >(
+			     1 , std::min< unsigned >( ncores ,
+						       f_n / dParallelK ) );
 
  if( nthreads > 1 ) {
-  ff::ParallelFor pf( nthreads );
+  /* The threads are started once and kept: on a machine with hundreds of
+   * cores starting them costs more than filling the matrix does, and a
+   * training that builds many models, as a cross-validation or a grid search
+   * does, would pay it once per model. Between two of these loops they sleep,
+   * the blocking policy being the default one. The pool is shared, and a
+   * ParallelFor cannot be run by two threads at once, whence the lock: the
+   * models of a model selection are trained in parallel. */
+
+  static std::mutex K_mutex;
+  static ff::ParallelFor pf( ncores );
+
+  std::lock_guard< std::mutex > lock( K_mutex );
   pf.parallel_for( 0 , f_n , 1 , 1 , row , nthreads );
   }
  else

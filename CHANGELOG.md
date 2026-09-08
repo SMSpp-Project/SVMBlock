@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- the Gram matrix is filled by as many threads as the data set warrants, one
+  every few hundred rows instead of one per core, and they are started once
+  and reused: on a machine with hundreds of cores starting them costs more
+  than filling the matrix does, and a training that builds many models paid
+  it once per model
+
 - the two dual indices of a sample of a `SVRBlock` are *adjacent*, rather than
   the two sides of the tube being one block each: a sample then adds its
   multipliers at the end of the dual index space, which is where a dynamic
