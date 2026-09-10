@@ -347,7 +347,7 @@ void SVMBlock::guts_of_load( void )
 {
  check_data();
 
- v_K.clear();       // the data set changed, and so did everything that is
+ drop_K();          // the data set changed, and so did everything that is
  v_dcoef.clear();   // derived from it
  f_gamma_res = 0;
 
@@ -486,7 +486,7 @@ void SVMBlock::set_kernel( int type , double gamma , int degree ,
  f_degree = degree;
  f_coef0 = coef0;
 
- v_K.clear();       // the Gram matrix, if any, is no longer the right one
+ drop_K();          // the Gram matrix, if any, is no longer the right one
  f_gamma_res = 0;   // and neither is the gamma derived from the data
  v_dcoef.clear();
 
@@ -920,7 +920,7 @@ void SVMBlock::add_samples( Index k , c_doubleVec & X , c_doubleVec & y ,
   v_X.resize( std::size_t( o_n ) * f_m );
   v_y.resize( o_n );
   f_n = o_n;
-  v_K.clear();
+  drop_K();
   set_dual_data();
   throw;
   }
@@ -1683,6 +1683,152 @@ SVMBlock::c_doubleVec & SVMBlock::get_K( void ) const
  return( v_K );
 
  }  // end( SVMBlock::get_K )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::drop_K( void ) const
+{
+ v_K.clear();
+ v_K_cache.clear();
+ v_K_slot.clear();
+ v_K_mask.clear();
+ K_lru.clear();
+ K_row2slot.clear();
+ f_K_slots = 0;
+ f_K_words = 0;
+
+ }  // end( SVMBlock::drop_K )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::set_K_memory( double bytes )
+{
+ if( bytes < 0 )
+  throw( std::invalid_argument(
+       "SVMBlock::set_K_memory: the budget cannot be negative" ) );
+
+ f_K_memory = bytes;
+
+ drop_K();   // whatever is cached was cached under the previous budget
+
+ }  // end( SVMBlock::set_K_memory )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::set_K_active( const Index * samples , Index n ,
+                             bool subset ) const
+{
+ if( ( samples == f_K_act ) && ( n == f_K_nact ) )
+  return;
+
+ /* What is cached was filled in for the previous set, hence it has holes for
+  * this one and has to go, the whole matrix, which has no holes, staying.
+  * A set contained in the previous one is the exception: the rows then carry
+  * more entries than will be read, which does no harm. */
+
+ /* Nothing is thrown away: each row knows which of its entries it has [see
+  * v_K_mask], and gets the ones it is missing when it is asked for again. */
+
+ f_K_act = samples;
+ f_K_nact = samples ? n : 0;
+
+ }  // end( SVMBlock::set_K_active )
+
+/*--------------------------------------------------------------------------*/
+
+const double * SVMBlock::K_row( Index i , bool full ) const
+{
+ if( i >= f_n )
+  throw( std::invalid_argument( "SVMBlock::get_K_row: no such row" ) );
+
+ // the whole matrix is there, or fits in the budget: read it out of it
+ if( v_K.size() == std::size_t( f_n ) * f_n )
+  return( v_K.data() + std::size_t( i ) * f_n );
+
+ const double whole = double( f_n ) * double( f_n ) * sizeof( double );
+ if( whole <= f_K_memory )
+  return( get_K().data() + std::size_t( i ) * f_n );
+
+ /* The cache: as many rows as the budget pays for, and never fewer than the
+  * two an algorithm holds while it updates along a pair. */
+
+ if( ! f_K_slots ) {
+  const double room = f_K_memory / ( double( f_n ) * sizeof( double ) );
+  f_K_slots = std::max< Index >( 2 , Index( room ) );
+  v_K_cache.resize( std::size_t( f_K_slots ) * f_n );
+  v_K_slot.assign( f_K_slots , f_n );   // f_n = "this slot holds nothing"
+  f_K_words = ( std::size_t( f_n ) + 63 ) / 64;
+  v_K_mask.assign( f_K_words * f_K_slots , 0 );
+  K_lru.clear();
+  K_row2slot.clear();
+  if( f_kernel != kLinear )
+   get_gamma();   // resolved once, as in get_K()
+  }
+
+ Index slot;
+ auto it = K_row2slot.find( i );
+ if( it != K_row2slot.end() ) {        // it is there: the most recent now
+  slot = it->second.first;
+  K_lru.splice( K_lru.end() , K_lru , it->second.second );
+
+  }
+ else {
+  if( K_lru.size() < f_K_slots )       // there is an empty slot
+   slot = Index( K_lru.size() );
+  else {                               // evict the least recently used
+   slot = K_lru.front();
+   K_row2slot.erase( v_K_slot[ slot ] );
+   K_lru.pop_front();
+   }
+
+  v_K_slot[ slot ] = i;
+  K_row2slot[ i ] = { slot , K_lru.insert( K_lru.end() , slot ) };
+  std::fill_n( v_K_mask.begin() + f_K_words * slot , f_K_words , 0 );
+  }
+
+ std::uint64_t * mask = v_K_mask.data() + f_K_words * slot;
+
+ auto missing = [ mask ]( Index j ) {
+  return( ! ( mask[ j / 64 ] & ( std::uint64_t( 1 ) << ( j % 64 ) ) ) );
+  };
+
+ auto mark = [ mask ]( Index j ) {
+  mask[ j / 64 ] |= std::uint64_t( 1 ) << ( j % 64 );
+  };
+
+ double * row = v_K_cache.data() + std::size_t( slot ) * f_n;
+
+ /* Only the entries that are going to be read [see set_K_active()]: with the
+  * active set a fraction of the data set, this is where the row stops costing
+  * O( n m ). */
+
+ /* The entries the active set asks for, when they are few enough to be worth
+  * the sparse writing: below half the row, going through the active set and
+  * skipping what is there already costs less than the row does, above it the
+  * row is filled in as it lies, which the memory likes better and which the
+  * mask then records in full. */
+
+ if( ( ! full ) && f_K_act &&
+     ( 2 * std::size_t( f_K_nact ) < std::size_t( f_n ) ) )
+  for( Index t = 0 ; t < f_K_nact ; ++t ) {
+   const Index j = f_K_act[ t ];
+   if( missing( j ) ) {
+    row[ j ] = kernel( i , j );
+    mark( j );
+    }
+   }
+ else {
+  for( Index j = 0 ; j < f_n ; ++j )
+   if( missing( j ) )
+    row[ j ] = kernel( i , j );
+
+  std::fill_n( v_K_mask.begin() + f_K_words * slot , f_K_words ,
+               ~ std::uint64_t( 0 ) );
+  }
+
+ return( row );
+
+ }  // end( SVMBlock::K_row )
 
 /*--------------------------------------------------------------------------*/
 /*------------------------------ THE STRUCTURE -----------------------------*/
@@ -2689,7 +2835,7 @@ void SVMBlock::guts_of_destructor( void )
  delete f_training_Results;
  f_training_Results = nullptr;
 
- v_K.clear();
+ drop_K();
  v_dcoef.clear();
  f_gamma_res = 0;
 

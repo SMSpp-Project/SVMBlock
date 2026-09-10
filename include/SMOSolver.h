@@ -665,7 +665,7 @@ class SMOSolver : public Solver
  double Q( Index k , Index l ) const
  {
   double q = f_ds[ k ] * f_ds[ l ] *
-             ( f_K[ std::size_t( f_di[ k ] ) * f_n + f_di[ l ] ] + f_rb )
+             ( f_SVM->kernel( f_di[ k ] , f_di[ l ] ) + f_rb )
              / f_rw;
   if( k == l )
    q += f_d;
@@ -721,7 +721,6 @@ class SMOSolver : public Solver
  double f_rw = 1;              ///< the weight of the regularisation term
  double f_mu = 0;              ///< the right-hand side of the equality
  double f_dc = 0;              ///< the constant term of the dual
- const double * f_K = nullptr;      ///< the n x n Gram matrix
  const Index * f_di = nullptr;      ///< the N sample indices
 
  /* The signs, the linear coefficients and the sample of each dual index are

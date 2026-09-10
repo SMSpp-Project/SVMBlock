@@ -367,8 +367,6 @@ void SMOSolver::reload( void )
  f_d = f_SVM->get_squared_loss() ? 1 / ( 2 * f_SVM->get_C() ) : 0;
  f_rw = f_SVM->get_reg_weight();
 
- f_K = f_SVM->get_K().data();
-
  v_s = f_SVM->get_dual_signs();
  v_di_c = f_SVM->get_dual_samples();
 
@@ -452,7 +450,6 @@ bool SMOSolver::resample( void )
  f_u = f_SVM->get_ub();
  f_d = f_SVM->get_squared_loss() ? 1 / ( 2 * f_SVM->get_C() ) : 0;
  f_rw = f_SVM->get_reg_weight();
- f_K = f_SVM->get_K().data();
  v_s = s;
  v_q = q;
  v_di_c = di;
@@ -538,8 +535,7 @@ bool SMOSolver::resync( void )
    return( false );
   }
 
- f_K = f_SVM->get_K().data();   // it may have been moved elsewhere in the
- v_di_c = f_SVM->get_dual_samples();                  // meantime
+ v_di_c = f_SVM->get_dual_samples();
  f_di = v_di_c.data();
 
  /* The gradient G = Q alpha + q is affine in the multipliers, in the linear
@@ -663,7 +659,7 @@ bool SMOSolver::restore_equality( void )
   v_alpha[ h ] += t;
   diff -= sh * t;
 
-  const double * Kh = f_K + std::size_t( f_di[ h ] ) * f_n;
+  const double * Kh = f_SVM->get_K_row_full( f_di[ h ] );
   const double dh = sh * t / f_rw;
 
   for( Index l = 0 ; l < f_N ; ++l )
@@ -1429,6 +1425,8 @@ void SMOSolver::swap_index( Index a , Index b )
 
 void SMOSolver::shrink( double m , double M )
 {
+ const Index was = f_act;
+
  for( Index k = 0 ; k < f_act ; ) {
   const double sk = f_ds[ k ];
   const double gk = - sk * v_G[ k ];
@@ -1449,12 +1447,21 @@ void SMOSolver::shrink( double m , double M )
 
   ++k;
   }
+
+ /* The rows are filled in for the active set alone, and this one is smaller
+  * than the one they were filled in for: they stay. */
+
+ if( f_act != was )
+  f_SVM->set_K_active( f_di , f_act , true );
+
  }  // end( SMOSolver::shrink )
 
 /*--------------------------------------------------------------------------*/
 
 void SMOSolver::shrink_box( double viol )
 {
+ const Index was = f_act;
+
  for( Index k = 0 ; k < f_act ; ) {
   const double ak = v_alpha[ k ];
   const double gk = v_G[ k ];
@@ -1469,6 +1476,10 @@ void SMOSolver::shrink_box( double viol )
 
   ++k;
   }
+
+ if( f_act != was )
+  f_SVM->set_K_active( f_di , f_act , true );
+
  }  // end( SMOSolver::shrink_box )
 
 /*--------------------------------------------------------------------------*/
@@ -1492,13 +1503,14 @@ void SMOSolver::unshrink( void )
    continue;
 
   const double cl = f_ds[ l ] * al / f_rw;
-  const double * Kl = f_K + std::size_t( f_di[ l ] ) * f_n;
+  const double * Kl = f_SVM->get_K_row_full( f_di[ l ] );
 
   for( Index k = f_act ; k < f_N ; ++k )
    v_G[ k ] += f_ds[ k ] * ( Kl[ f_di[ k ] ] + f_rb ) * cl;
   }
 
  f_act = f_N;
+ f_SVM->set_K_active( nullptr , 0 );
 
  }  // end( SMOSolver::unshrink )
 
@@ -1525,7 +1537,8 @@ void SMOSolver::fill_diagonal( void )
 
  for( Index k = 0 ; k < f_N ; ++k ) {
   const std::size_t ik = std::size_t( f_di[ k ] );
-  v_QD[ k ] = ( f_K[ ik * f_n + ik ] + f_rb ) / f_rw + f_d;
+  v_QD[ k ] = ( f_SVM->kernel( Index( ik ) , Index( ik ) ) + f_rb )
+              / f_rw + f_d;
   }
 
  }  // end( SMOSolver::fill_diagonal )
@@ -1568,6 +1581,7 @@ int SMOSolver::solve_with_equality( void )
  v_perm.resize( f_N );
  std::iota( v_perm.begin() , v_perm.end() , Index( 0 ) );
  f_act = f_N;
+ f_SVM->set_K_active( nullptr , 0 );
 
  // the bias interval of the previous iteration, which is what the shrinking
  // is decided on; the first one shrinks nothing, there being no interval yet
@@ -1629,7 +1643,7 @@ int SMOSolver::solve_with_equality( void )
   Index j = f_act;
   double M = Inf< double >() , best = 0;
 
-  const double * Ki = ( i < f_act ) ? f_K + std::size_t( f_di[ i ] ) * f_n
+  const double * Ki = ( i < f_act ) ? f_SVM->get_K_row( f_di[ i ] )
                                     : nullptr;
   const double Qii = Ki ? v_QD[ i ] : 0;
 
@@ -1735,7 +1749,7 @@ int SMOSolver::solve_with_equality( void )
 
   // update the gradient - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-  const double * Kj = f_K + std::size_t( f_di[ j ] ) * f_n;
+  const double * Kj = f_SVM->get_K_row( f_di[ j ] );
 
   /* The Hessian is the reweighted Gram matrix divided by the weight of the
    * regularisation term [see Q()], which is read here directly rather than
@@ -1780,6 +1794,7 @@ int SMOSolver::solve_box( void )
  v_perm.resize( f_N );
  std::iota( v_perm.begin() , v_perm.end() , Index( 0 ) );
  f_act = f_N;
+ f_SVM->set_K_active( nullptr , 0 );
 
  // the largest violation of the previous iteration, which is what the
  // shrinking is decided on; the first one shrinks nothing
@@ -1869,7 +1884,7 @@ int SMOSolver::solve_box( void )
   v_alpha[ i ] = ai;
 
   const double si = f_ds[ i ];
-  const double * Ki = f_K + std::size_t( f_di[ i ] ) * f_n;
+  const double * Ki = f_SVM->get_K_row( f_di[ i ] );
 
   const double di = si * dai / f_rw;   // as in solve_with_equality()
 

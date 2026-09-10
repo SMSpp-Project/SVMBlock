@@ -39,6 +39,8 @@
 
 #include "Solution.h"
 
+#include <cstdint>
+
 #include <list>
 
 /*--------------------------------------------------------------------------*/
@@ -966,6 +968,69 @@ class SVMBlock : public Block
 
  c_doubleVec & get_K( void ) const;
 
+/*--------------------------------------------------------------------------*/
+ /// returns the \p i-th row of the Gram matrix, \f$ n \f$ entries
+ /** Returns a pointer to the \p i-th row of the Gram matrix. When the whole
+  * matrix is there [see get_K()] the row is read out of it; otherwise it is
+  * computed, and kept in a cache of the least recently used rows whose size
+  * is what set_K_memory() says. An algorithm that reads a few rows per
+  * iteration, as the decomposition methods do, therefore need not pay the
+  * \f$ O( n^2 ) \f$ memory of the whole matrix.
+  *
+  * The cache never evicts the two rows that were asked for last, hence the
+  * two pointers an algorithm holds while it updates along a pair stay valid;
+  * an older one does not. */
+
+ const double * get_K_row( Index i ) const { return( K_row( i , false ) ); }
+
+/*--------------------------------------------------------------------------*/
+ /// the entries of the rows that get_K_row() has to fill in
+ /** Says which columns of a row get_K_row() is going to be read at, i.e., the
+  * samples an algorithm is still working on: the rows it computes carry those
+  * entries alone, the others being left as they are, which is what makes a
+  * cached row cost \f$ O( |A| m ) \f$ instead of \f$ O( n m ) \f$ when the
+  * active set A is a fraction of the data set. Whoever needs a row in full
+  * asks get_K_row_full() for it.
+  *
+  * Passing a different set throws away what is cached, the rows in it having
+  * been filled in for the previous one, unless \p subset says that the new
+  * set is contained in the one it replaces: the entries a row then has are a
+  * superset of those that will be read, hence it is still good, and a
+  * shrinking algorithm keeps its rows by saying so. Each row remembers which
+  * of its entries have been computed, so that going back to a larger set,
+  * which passing nullptr does, costs the entries that are missing and not
+  * the rows. The array is not copied, hence it has to outlive the calls to
+  * get_K_row(). */
+
+ void set_K_active( const Index * samples , Index n ,
+                    bool subset = false ) const;
+
+/*--------------------------------------------------------------------------*/
+ /// returns the \p i-th row of the Gram matrix, every entry of it
+ /** Same as get_K_row(), except that every one of the \f$ n \f$ entries is
+  * there whatever set_K_active() says, and the row is cached like any other:
+  * the entries it was missing are the only cost. */
+
+ const double * get_K_row_full( Index i ) const
+ { return( K_row( i , true ) ); }
+
+/*--------------------------------------------------------------------------*/
+ /// how much memory the rows of the Gram matrix may take, in bytes
+ /** Sets how much memory get_K_row() may use for its cache, and, with it,
+  * whether get_K_row() materializes the whole Gram matrix: it does when the
+  * matrix fits in that budget, the whole matrix being both faster to read
+  * and cheaper to compute than the rows one at a time, and it does not
+  * otherwise. Zero means "never materialize it, and cache one row alone",
+  * which is the least memory the algorithms can run in. The default is
+  * 1 GB. */
+
+ void set_K_memory( double bytes );
+
+/*--------------------------------------------------------------------------*/
+ /// forgets the Gram matrix and the rows of it that are cached
+
+ void drop_K( void ) const;
+
 /** @} ---------------------------------------------------------------------*/
 /*------------------ METHODS FOR READING THE TRAINED MODEL -----------------*/
 /*--------------------------------------------------------------------------*/
@@ -1300,6 +1365,40 @@ class SVMBlock : public Block
  doubleVec v_dq;             ///< the N linear coefficients q_k
 
  mutable doubleVec v_K;      ///< the cached n x n Gram matrix
+
+ /* The rows of the Gram matrix, kept for the algorithms that read a few of
+  * them per iteration rather than all of it: a Solver asks for a row [see
+  * get_K_row()] and gets one out of the whole matrix when that is there, out
+  * of a cache of rows otherwise, the row being computed on the spot when the
+  * cache does not have it. The cache is a plain LRU: v_K_cache holds
+  * f_K_slots rows of f_n entries each, v_K_slot says which row sits in each
+  * slot, K_row2slot maps a row to its slot and to its position in K_lru,
+  * whose front is the least recently used. */
+
+ mutable doubleVec v_K_cache;        ///< the rows the cache holds
+ mutable std::vector< Index > v_K_slot;   ///< the row each slot holds
+ mutable std::list< Index > K_lru;   ///< the slots, least recently used first
+ mutable std::map< Index , std::pair< Index , std::list< Index >::iterator > >
+                    K_row2slot;      ///< where a row is, if it is there
+ /* Which entries of a cached row have been computed: one bit per entry and
+  * per slot, so that a row that is asked for again, for a set that has
+  * entries the previous one had not, is completed rather than recomputed.
+  * It costs an eighth of a byte per entry against the eight bytes the entry
+  * itself takes. */
+
+ mutable std::vector< std::uint64_t > v_K_mask;
+ mutable std::size_t f_K_words = 0;  ///< the words one row's mask takes
+ mutable Index f_K_slots = 0;        ///< how many rows the cache holds
+ mutable const Index * f_K_act = nullptr;  ///< the samples still worked on
+ mutable Index f_K_nact = 0;         ///< how many they are
+
+/*--------------------------------------------------------------------------*/
+ /// serves a row of the Gram matrix, all of it if \p full says so
+
+ const double * K_row( Index i , bool full ) const;
+
+ /// how much memory the rows of the Gram matrix may take, in bytes
+ double f_K_memory = 1024 * 1024 * 1024.0;
  mutable double f_gamma_res = 0;
  ///< the cached value of gamma derived from the data, 0 if not derived yet
 

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `get_K_row()`, which serves one row of the Gram matrix, and
+  `set_K_memory()`, which says how much memory the matrix may take: under
+  that budget the whole matrix is built as before, over it the rows are
+  computed on demand and kept in a cache of the least recently used ones, so
+  that a data set whose Gram matrix does not fit in memory can be trained
+  anyway. `set_K_active()` tells the cache which entries are going to be read,
+  and each row records which of its own it has already computed: an algorithm
+  that shrinks its active set therefore pays for the entries it asks for, and
+  completes a row rather than recomputing it when the set grows back
+
 - `add_samples()` and `remove_samples()`, which change the data set instead of
   replacing it, with the `eAddSamples` and `eRmvSamples` Modification: the
   samples that stay are not touched, their multipliers keep their value and
