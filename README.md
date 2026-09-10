@@ -3,7 +3,8 @@
 Definition and implementation of the `SVMBlock` class, which implements the
 `Block` interface within the SMS++ framework for the training problem of a
 *Support Vector Machine* (SVM), together with the ad hoc `SMOSolver` and with
-`LIBSVMSolver`, which hands the training problem over to LIBSVM.
+`LIBSVMSolver` and `LIBLINEARSolver`, which hand the training problem over to
+LIBSVM and to LIBLINEAR.
 
 Two concrete classes derive from the abstract `SVMBlock`: `SVCBlock`, for the
 *Support Vector Classifier*, i.e., the maximum-margin hyperplane separating the
@@ -147,6 +148,19 @@ be compared with those of the ones that solve the very problem. It is built
 only when LIBSVM is found, everything else in the module requiring nothing
 beyond the core.
 
+`LIBLINEARSolver` hands the training problem over to
+[LIBLINEAR](https://www.csie.ntu.edu.tw/~cjlin/liblinear/), which trains a
+linear model by working in the weights rather than in the multipliers, and it
+covers the side of the problem LIBSVM does not: both losses and any weight of
+the regularisation term, but the linear kernel only and the regularised bias
+only, the bias being one more feature of value one appended to each sample.
+What it returns is the model rather than the kernel expansion, so the value of
+the training problem is computed here out of the model; and since the number
+of iterations of LIBLINEAR is capped in its own sources rather than being a
+parameter, a run that stops on the cap is reported as `kLowPrecision`, its
+value being an upper bound on the optimal one and nothing more. It is built
+only when LIBLINEAR is found.
+
 Solving the consensus rewriting needs modules this one does not depend on: the
 `SVMBlock` suite of the [tests](https://gitlab.com/smspp/tests) repo does it
 with `LagrangianDualSolver`, `BundleSolver` and a `:MILPSolver`, and the
@@ -169,6 +183,12 @@ your system.
   found. Any version from 3.0 on does: `sudo apt install libsvm-dev` on
   Debian/Ubuntu, `brew install libsvm` on macOS, `vcpkg install libsvm` on
   Windows.
+
+- [LIBLINEAR](https://www.csie.ntu.edu.tw/~cjlin/liblinear/), optional and
+  only needed by `LIBLINEARSolver`, which is left out of the library when it
+  is not found. Any version from 2.0 on does: `sudo apt install
+  liblinear-dev` on Debian/Ubuntu, `brew install liblinear` on macOS,
+  `vcpkg install liblinear` on Windows.
 
 ### Build and install with CMake
 

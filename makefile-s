@@ -40,6 +40,9 @@
 # include makefile for libLIBSVM
 include $(SVMBkSDR)/../extlib/makefile-libLIBSVM
 
+# include makefile for libLIBLINEAR
+include $(SVMBkSDR)/../extlib/makefile-libLIBLINEAR
+
 # include the makefile requiring all external modules in input
 include $(SVMBkSDR)/makefile
 
@@ -48,9 +51,9 @@ include $(SVMBkSDR)/makefile
 # append external -I directives to SVMBkINC, SVMBkOBJ and SVMBkH as defined
 # by the makefile, thus the := assignment has to be used (use GNU make)
 SVMBkOBJ := $(SVMBkOBJ)
-SVMBkINC := $(SVMBkINC) $(libLIBSVMINC)
+SVMBkINC := $(SVMBkINC) $(libLIBSVMINC) $(libLIBLINEARINC)
 
 # external libraries for SVMBlock
-SVMBkLIB = $(libLIBSVMLIB)
+SVMBkLIB = $(libLIBSVMLIB) $(libLIBLINEARLIB)
 
 ############################ End of makefile #################################

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `LIBLINEARSolver`, which hands the training problem over to LIBLINEAR: the
+  linear kernel only and the regularised bias only, but both losses and any
+  weight of the regularisation term, which is the side of the problem
+  `LIBSVMSolver` does not cover. A run that stops on the cap LIBLINEAR has on
+  its own iterations is reported as `kLowPrecision`
+
 - `get_K_row()`, which serves one row of the Gram matrix, and
   `set_K_memory()`, which says how much memory the matrix may take: under
   that budget the whole matrix is built as before, over it the rows are

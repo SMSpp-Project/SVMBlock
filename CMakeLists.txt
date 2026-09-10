@@ -47,6 +47,8 @@ include(BuildType)
 
 # ----- Settings ------------------------------------------------------------ #
 option(SVMBlock_USE_LIBSVM "Whether SVMBlock will use LIBSVM or not." ON)
+option(SVMBlock_USE_LIBLINEAR
+       "Whether SVMBlock will use LIBLINEAR or not." ON)
 
 # ----- Requirements -------------------------------------------------------- #
 # If it's not being called by the umbrella, we need to
@@ -63,12 +65,23 @@ if (SVMBlock_USE_LIBSVM)
     endif ()
 endif ()
 
+if (SVMBlock_USE_LIBLINEAR)
+    # Needed for LIBLINEARSolver
+    find_package(LIBLINEAR 2.0)
+    if (NOT LIBLINEAR_FOUND)
+        set(SVMBlock_USE_LIBLINEAR OFF)
+    endif ()
+endif ()
+
 # Whether LIBSVMSolver is in the library, which whoever uses SVMBlock has to
 # know: the tests only run the batch that attaches it when it is there. It is
 # a cache entry because LIBSVM_FOUND, being set by find_package(), only lives
 # in this directory.
 set(SVMBlock_HAS_LIBSVM ${SVMBlock_USE_LIBSVM}
     CACHE INTERNAL "Whether SVMBlock was built with LIBSVM.")
+
+set(SVMBlock_HAS_LIBLINEAR ${SVMBlock_USE_LIBLINEAR}
+    CACHE INTERNAL "Whether SVMBlock was built with LIBLINEAR.")
 
 # ----- Configuration header ------------------------------------------------ #
 # This will generate a *Config.h header in the build directory.
@@ -123,6 +136,12 @@ if (SVMBlock_USE_LIBSVM)
     message(STATUS "SVMBlock: LIBSVM found, configuring LIBSVMSolver")
     target_sources(${modName} PRIVATE src/LIBSVMSolver.cpp)
     target_link_libraries(${modName} PUBLIC LIBSVM::LIBSVM)
+endif ()
+
+if (SVMBlock_USE_LIBLINEAR)
+    message(STATUS "SVMBlock: LIBLINEAR found, configuring LIBLINEARSolver")
+    target_sources(${modName} PRIVATE src/LIBLINEARSolver.cpp)
+    target_link_libraries(${modName} PUBLIC LIBLINEAR::LIBLINEAR)
 endif ()
 
 # This alias is defined so that executables in this same project can use
