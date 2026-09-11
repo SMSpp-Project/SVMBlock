@@ -1,28 +1,28 @@
 # --------------------------------------------------------------------------- #
-#    CMake find module for LIBLINEAR                                             #
+#    CMake find module for LIBLINEAR                                          #
 #                                                                             #
-#    This module finds LIBLINEAR include directories and libraries.              #
+#    This module finds LIBLINEAR include directories and libraries.           #
 #    Use it by invoking find_package() with the form:                         #
 #                                                                             #
-#        find_package(LIBLINEAR [version] [EXACT] [REQUIRED])                    #
+#        find_package(LIBLINEAR [version] [EXACT] [REQUIRED])                 #
 #                                                                             #
 #    The results are stored in the following variables:                       #
 #                                                                             #
-#        LIBLINEAR_FOUND         - True if headers are found                     #
-#        LIBLINEAR_INCLUDE_DIRS  - Include directories                           #
-#        LIBLINEAR_LIBRARIES     - Libraries to be linked                        #
-#        LIBLINEAR_DLL           - The found runtime DLL (Windows only)          #
-#        LIBLINEAR_VERSION       - Version number                                #
+#        LIBLINEAR_FOUND         - True if headers are found                  #
+#        LIBLINEAR_INCLUDE_DIRS  - Include directories                        #
+#        LIBLINEAR_LIBRARIES     - Libraries to be linked                     #
+#        LIBLINEAR_DLL           - The found runtime DLL (Windows only)       #
+#        LIBLINEAR_VERSION       - Version number                             #
 #                                                                             #
 #    This module reads hints about search locations from variables:           #
 #                                                                             #
-#        LIBLINEAR_ROOT          - Custom path to LIBLINEAR                         #
+#        LIBLINEAR_ROOT          - Custom path to LIBLINEAR                   #
 #                                                                             #
 #    The following IMPORTED target is also defined:                           #
 #                                                                             #
-#        LIBLINEAR::LIBLINEAR                                                       #
+#        LIBLINEAR::LIBLINEAR                                                 #
 #                                                                             #
-#    This find module is provided because LIBLINEAR does not provide             #
+#    This find module is provided because LIBLINEAR does not provide          #
 #    a CMake configuration file on its own.                                   #
 #                                                                             #
 #                                Donato Meoli                                 #
@@ -90,7 +90,7 @@ if (NOT LIBLINEAR_FOUND)
                     CACHE FILEPATH "LIBLINEAR debug library." FORCE)
         endif ()
 
-        # ----- Find the LIBLINEAR runtime DLL on Windows ---------------------- #
+        # ----- Find the LIBLINEAR runtime DLL on Windows ------------------- #
         find_file(LIBLINEAR_DLL
                 NAMES linear.dll liblinear.dll
                 PATHS
