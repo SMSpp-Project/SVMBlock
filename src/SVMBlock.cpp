@@ -73,6 +73,10 @@ using v_off_diag_term = QuadFunction::v_off_diag_term;
 
 SMSpp_insert_in_factory_cpp_0( SVMBlockSolution );
 
+// the symbol that a program linking the module asks for, which no class of
+// the factory is named after
+SMSpp_define_force_load( SVMBlock );
+
 /*--------------------------------------------------------------------------*/
 /*----------------------------- CONSTANTS ----------------------------------*/
 /*--------------------------------------------------------------------------*/
