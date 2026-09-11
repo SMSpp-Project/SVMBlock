@@ -36,6 +36,10 @@
 
 #include <ff/parallel_for.hpp>
 
+// ff/pipeline.hpp declares the static isa2a_get*set() helpers, which are only
+// defined in ff/graph_utils.hpp: MSVC rejects the undefined static with C2129
+#include <ff/graph_utils.hpp>
+
 #include <algorithm>
 
 #include <cmath>
