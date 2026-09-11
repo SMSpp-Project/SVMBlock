@@ -913,6 +913,38 @@ void SVMBlock::add_samples( Index k , c_doubleVec & X , c_doubleVec & y ,
     }
   }
 
+ /* The cached rows are re-laid out for the very same reason, the entries
+  * they hold being still the right ones and only sitting farther apart, and
+  * the mask keeps saying which those are, the entries of the new samples
+  * being simply not there yet. The rows are longer now, though, so fewer of
+  * them fit in the budget: when they no longer do, the cache goes and is
+  * built again, at the right size, the next time a row is asked for. */
+ if( f_K_slots ) {
+  if( double( f_K_slots ) * f_n * sizeof( double ) > f_K_memory )
+   drop_K_cache();
+  else {
+   doubleVec nc( std::size_t( f_K_slots ) * f_n );
+   for( Index s = 0 ; s < f_K_slots ; ++s )
+    std::copy_n( v_K_cache.begin() + std::size_t( s ) * o_n , o_n ,
+                 nc.begin() + std::size_t( s ) * f_n );
+   v_K_cache = std::move( nc );
+
+   const std::size_t words = ( std::size_t( f_n ) + 63 ) / 64;
+   std::vector< std::uint64_t > nm( words * f_K_slots , 0 );
+   for( Index s = 0 ; s < f_K_slots ; ++s )
+    std::copy_n( v_K_mask.begin() + f_K_words * s , f_K_words ,
+                 nm.begin() + words * s );
+   v_K_mask = std::move( nm );
+   f_K_words = words;
+   }
+  }
+
+ /* Whatever the cache does, the active set goes: it points into the arrays of
+  * the algorithm, which the addition has just made stale, and reading it
+  * would fill the rows at whatever the freed memory says. */
+ f_K_act = nullptr;
+ f_K_nact = 0;
+
  try {
   set_dual_data();   // the parametric map of the new data set
   }
@@ -1025,6 +1057,12 @@ void SVMBlock::remove_samples( Subset && nms , bool ordered ,
      v_K[ std::size_t( o_smpl[ i ] ) * o_n + o_smpl[ j ] ];
   v_K = std::move( nK );
   }
+
+ /* The cached rows go instead of being re-laid out: a removal renumbers the
+  * samples, so a cached row would have to be permuted and its mask with it,
+  * and there is no addition to pay for it, the rows being fewer and shorter.
+  * They are computed again when they are asked for. */
+ drop_K_cache();
 
  /* Which dual indices go with the samples that go: they are found in the
   * dual index space as it was, i.e., before the map is rebuilt. */
@@ -1689,6 +1727,21 @@ SVMBlock::c_doubleVec & SVMBlock::get_K( void ) const
 void SVMBlock::drop_K( void ) const
 {
  v_K.clear();
+ drop_K_cache();
+
+ }  // end( SVMBlock::drop_K )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::drop_K_cache( void ) const
+{
+ /* The active set is a pointer into whatever the algorithm holds, and it says
+  * which entries of a row are worth computing: it cannot survive the cache
+  * that was filled under it, and the algorithm declares it again when it has
+  * one. */
+ f_K_act = nullptr;
+ f_K_nact = 0;
+
  v_K_cache.clear();
  v_K_slot.clear();
  v_K_mask.clear();
@@ -1697,7 +1750,7 @@ void SVMBlock::drop_K( void ) const
  f_K_slots = 0;
  f_K_words = 0;
 
- }  // end( SVMBlock::drop_K )
+ }  // end( SVMBlock::drop_K_cache )
 
 /*--------------------------------------------------------------------------*/
 
@@ -1822,8 +1875,18 @@ const double * SVMBlock::K_row( Index i , bool full ) const
    if( missing( j ) )
     row[ j ] = kernel( i , j );
 
-  std::fill_n( v_K_mask.begin() + f_K_words * slot , f_K_words ,
+  /* Every entry of the row is there now, and the mask says so. What it must
+   * not say is that the bits past the end of the row are there too: they
+   * stand for no entry today, but they do as soon as samples are added and
+   * the row grows into them, and a bit set on an entry that was never
+   * computed is a garbage value served as a good one. */
+
+  const std::size_t whole = std::size_t( f_n ) / 64;
+  std::fill_n( v_K_mask.begin() + f_K_words * slot , whole ,
                ~ std::uint64_t( 0 ) );
+  if( whole < f_K_words )
+   v_K_mask[ f_K_words * slot + whole ] =
+    ( std::uint64_t( 1 ) << ( std::size_t( f_n ) % 64 ) ) - 1;
   }
 
  return( row );

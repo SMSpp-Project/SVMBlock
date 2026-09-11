@@ -1031,6 +1031,16 @@ class SVMBlock : public Block
 
  void drop_K( void ) const;
 
+/*--------------------------------------------------------------------------*/
+ /// forgets the cached rows, leaving the Gram matrix where it is
+ /** Forgets the rows that are cached, together with everything that says
+  * which they are, and leaves the Gram matrix alone: what the cache holds is
+  * laid out on the number of samples of the moment, so a change of the data
+  * set invalidates it, while the matrix itself is re-laid out in place by
+  * whoever makes that change. */
+
+ void drop_K_cache( void ) const;
+
 /** @} ---------------------------------------------------------------------*/
 /*------------------ METHODS FOR READING THE TRAINED MODEL -----------------*/
 /*--------------------------------------------------------------------------*/
