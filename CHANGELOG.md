@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- the cache of the rows of the Gram matrix did not survive a change of the
+  data set: it was laid out once on the number of samples of the moment, so
+  adding samples wrote past the end of it, and its mask marked as present the
+  bits past the end of a row, which stand for no entry until the row grows
+  into them and then serve an entry that was never computed. Learning one
+  sample at a time under a memory budget therefore either crashed or took a
+  different number of iterations; it now takes the same number as with the
+  whole matrix, which is the only right answer
+
 - `SVMBlockSolution::read()` only looked at the physical representation, hence
   it saved nothing at all when the SVMBlock had been solved by a Solver
   working on the abstract one, which is where the model is then left
