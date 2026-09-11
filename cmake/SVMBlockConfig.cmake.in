@@ -19,6 +19,15 @@ include(CMakeFindDependencyMacro)
 # ----- Requirements -------------------------------------------------------- #
 find_dependency(SMS++)
 
+list(APPEND CMAKE_MODULE_PATH ${@modName@_CMAKE_DIR})
+if (@SVMBlock_USE_LIBSVM@)
+    find_dependency(LIBSVM 3.0)
+endif ()
+if (@SVMBlock_USE_LIBLINEAR@)
+    find_dependency(LIBLINEAR 2.0)
+endif ()
+list(REMOVE_AT CMAKE_MODULE_PATH -1)
+
 # ----- Import target ------------------------------------------------------- #
 if (NOT TARGET @modNamespace@::@modName@)
     include("${@modName@_CMAKE_DIR}/@modName@Targets.cmake")
