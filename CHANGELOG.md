@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.1.0] - 2026-09-12
+
+### Added
+
+- `SVMBlock`, the abstract base class holding the data set, the
+  hyper-parameters, the kernel and both the training problem and its Wolfe
+  dual, the latter written as the maximisation it customarily is, so that
+  the value of the Objective is the same number whichever is encoded
+
+- `SVCBlock` and `SVRBlock`, the classification and the regression variants
+
+- `SMOSolver`, the ad hoc Sequential Minimal Optimization solver for the dual
+
+- netCDF and text serialization, and the tester
+
 - `LIBLINEARSolver`, which hands the training problem over to LIBLINEAR: the
   linear kernel only and the regularised bias only, but both losses and any
   weight of the regularisation term, which is the side of the problem
@@ -89,6 +108,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - the Gram matrix of a data set large enough to be worth a thread is computed
   in parallel
 
+- the version of the module is the git tag of its repository, or the
+  VERSION.txt of a release tarball, and the shared library carries it: its
+  SONAME is major.minor while the major is 0, and it is installed with an
+  RPATH relative to itself, so that an installed tree keeps working wherever
+  it is moved
+
 ### Fixed
 
 - the cache of the rows of the Gram matrix did not survive a change of the
@@ -108,26 +133,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all, so that a Solver reading it found an empty problem after the
   NBModification; it is now rebuilt out of the new data set
 
-### Fixed
-
 - the conventional values of gamma, which are derived from the data set, were
   derived again at each of the O( n^2 ) entries of the Gram matrix
 
-## [0.1.0] - 2026-08-04
+- the library builds with MSVC, which rejects the FastFlow helpers that are
+  declared static and not defined
 
-### Added
+- the package configuration file finds the libraries the module links, so that
+  a project using the installed module needs nothing more than find_package()
 
-- `SVMBlock`, the abstract base class holding the data set, the
-  hyper-parameters, the kernel and both the training problem and its Wolfe
-  dual, the latter written as the maximisation it customarily is, so that
-  the value of the Objective is the same number whichever is encoded
-
-- `SVCBlock` and `SVRBlock`, the classification and the regression variants
-
-- `SMOSolver`, the ad hoc Sequential Minimal Optimization solver for the dual
-
-- `make_consensus_Block()`, which assembles the training problem written as
-  one problem per chunk of samples tied by consensus constraints, i.e., the
-  structure a generic Lagrangian, or Dantzig-Wolfe, Solver attacks
-
-- netCDF and text serialization, and the tester
+[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.1.0...develop
+[0.1.0]: https://gitlab.com/smspp/svmblock/-/tags/0.1.0
