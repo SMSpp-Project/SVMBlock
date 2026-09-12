@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- the samples are read as the list of their nonzeroes when the data set is
+  sparse, which is how the kernel is computed there: the dense reading costs
+  m operations per evaluation whatever the data holds, the merge of two such
+  lists costs their nonzeroes, and the second is worth it below about a tenth
+  of density, where the lists are built and above which they are not. The
+  Gaussian kernel goes through the two squared norms and the inner product,
+  the Laplacian one walks the union rather than the intersection, and the
+  value is the very same the dense reading gives, the entries that are
+  skipped being zeroes: not a single iteration changes. On `w8a`, which is
+  3.9 per cent full, this is a factor of 4.5 on the solve
+
 ### Changed
 
 ### Fixed

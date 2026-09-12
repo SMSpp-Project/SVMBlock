@@ -355,6 +355,7 @@ void SVMBlock::guts_of_load( void )
 {
  check_data();
 
+ drop_sparse();     // the lists of nonzeroes are of the samples that were
  drop_K();          // the data set changed, and so did everything that is
  v_dcoef.clear();   // derived from it
  f_gamma_res = 0;
@@ -921,6 +922,8 @@ void SVMBlock::add_samples( Index k , c_doubleVec & X , c_doubleVec & y ,
     }
   }
 
+ drop_sparse();   // the lists of nonzeroes are of the samples that were
+
  /* The cached rows are re-laid out for the very same reason, the entries
   * they hold being still the right ones and only sitting farther apart, and
   * the mask keeps saying which those are, the entries of the new samples
@@ -1065,6 +1068,8 @@ void SVMBlock::remove_samples( Subset && nms , bool ordered ,
      v_K[ std::size_t( o_smpl[ i ] ) * o_n + o_smpl[ j ] ];
   v_K = std::move( nK );
   }
+
+ drop_sparse();   // the lists of nonzeroes are of the samples that were
 
  /* The cached rows go instead of being re-laid out: a removal renumbers the
   * samples, so a cached row would have to be permuted and its mask with it,
@@ -1625,6 +1630,124 @@ double SVMBlock::get_gamma( void ) const
  }  // end( SVMBlock::get_gamma )
 
 /*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::build_sparse( void ) const
+{
+ f_sparse = 2;   // dense until the count says otherwise
+
+ v_Xp.clear();
+ v_Xi.clear();
+ v_Xv.clear();
+ v_Xn2.clear();
+
+ if( ( ! f_n ) || ( ! f_m ) || ( v_X.size() < std::size_t( f_n ) * f_m ) )
+  return;
+
+ std::size_t nnz = 0;
+ for( auto xi : v_X )
+  if( xi != 0 )
+   ++nnz;
+
+ /* A tenth of the entries is where the merge stops paying [see v_Xp]: above
+  * it the dense reading wins, and the lists would only cost the memory. */
+
+ if( double( nnz ) > 0.1 * double( f_n ) * double( f_m ) )
+  return;
+
+ v_Xp.resize( f_n + 1 );
+ v_Xi.reserve( nnz );
+ v_Xv.reserve( nnz );
+ v_Xn2.resize( f_n );
+
+ v_Xp[ 0 ] = 0;
+ for( Index i = 0 ; i < f_n ; ++i ) {
+  const double * x = get_x( i );
+  double n2 = 0;
+  for( Index j = 0 ; j < f_m ; ++j )
+   if( x[ j ] != 0 ) {
+    v_Xi.push_back( j );
+    v_Xv.push_back( x[ j ] );
+    n2 += x[ j ] * x[ j ];
+    }
+  v_Xn2[ i ] = n2;
+  v_Xp[ i + 1 ] = Index( v_Xi.size() );
+  }
+
+ f_sparse = 1;
+
+ }  // end( SVMBlock::build_sparse )
+
+/*--------------------------------------------------------------------------*/
+
+double SVMBlock::kernel_sparse( Index i , Index j ) const
+{
+ const Index ei = v_Xp[ i + 1 ] , ej = v_Xp[ j + 1 ];
+ Index a = v_Xp[ i ] , b = v_Xp[ j ];
+
+ /* The Laplacian one is the only kernel that reads the features where only
+  * one of the two samples has a nonzero, the other contributing its own
+  * value there, hence it walks the union rather than the intersection. */
+
+ if( f_kernel == kLaplacian ) {
+  double d = 0;
+  while( ( a < ei ) && ( b < ej ) )
+   if( v_Xi[ a ] == v_Xi[ b ] ) {
+    d += std::abs( v_Xv[ a ] - v_Xv[ b ] );
+    ++a;
+    ++b;
+    }
+   else
+    if( v_Xi[ a ] < v_Xi[ b ] )
+     d += std::abs( v_Xv[ a++ ] );
+    else
+     d += std::abs( v_Xv[ b++ ] );
+
+  for( ; a < ei ; ++a )
+   d += std::abs( v_Xv[ a ] );
+  for( ; b < ej ; ++b )
+   d += std::abs( v_Xv[ b ] );
+
+  return( std::exp( - get_gamma() * d ) );
+  }
+
+ double d = 0;
+ while( ( a < ei ) && ( b < ej ) )
+  if( v_Xi[ a ] == v_Xi[ b ] ) {
+   d += v_Xv[ a ] * v_Xv[ b ];
+   ++a;
+   ++b;
+   }
+  else
+   if( v_Xi[ a ] < v_Xi[ b ] )
+    ++a;
+   else
+    ++b;
+
+ switch( f_kernel ) {
+  case( kLinear ):
+   return( d );
+
+  case( kPoly ):
+   return( std::pow( get_gamma() * d + f_coef0 , f_degree ) );
+
+  case( kGaussian ): {
+   /* || x - z ||^2 is read off the two squared norms and the inner product,
+    * which is what makes the Gaussian kernel a sparse operation as well; the
+    * subtraction can go a rounding error below zero on two equal samples. */
+
+   const double n2 = v_Xn2[ i ] + v_Xn2[ j ] - 2 * d;
+   return( std::exp( - get_gamma() * std::max( n2 , double( 0 ) ) ) );
+   }
+
+  case( kSigmoid ):
+   return( std::tanh( get_gamma() * d + f_coef0 ) );
+  }
+
+ throw( std::logic_error( "SVMBlock::kernel_sparse: unknown kernel type" ) );
+
+ }  // end( SVMBlock::kernel_sparse )
 
 double SVMBlock::kernel( const double * x , const double * z ) const
 {
