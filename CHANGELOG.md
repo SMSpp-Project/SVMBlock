@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.2.0] - 2026-09-13
+
+### Added
+
 - the samples are read as the list of their nonzeroes when the data set is
   sparse, which is how the kernel is computed there: the dense reading costs
   m operations per evaluation whatever the data holds, the merge of two such
@@ -19,10 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value is the very same the dense reading gives, the entries that are
   skipped being zeroes: not a single iteration changes. On `w8a`, which is
   3.9 per cent full, this is a factor of 4.5 on the solve
-
-### Changed
-
-### Fixed
 
 ## [0.1.0] - 2026-09-12
 
