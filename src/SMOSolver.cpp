@@ -248,26 +248,23 @@ Solution * SMOSolver::get_Solution( Configuration * solc )
  if( ! f_solved )
   return( nullptr );
 
- /* Which Solution the Configuration asks for is the SVMBlock's business, and
-  * asking it for an empty one is how it is found out: filling it is this
-  * Solver's business only if it is the one saving the model, which is
-  * precisely the one that requires no Variable to exist. */
+ /* A physical Solver produces the Solution its Block keeps the model in,
+  * whatever the Configuration says: the Block is asked for that one [see
+  * SVMBlock::get_Solution()] rather than the :Solution being constructed by
+  * name here, so that a derived :Block is given the chance of answering
+  * with its own. */
 
- auto sol = f_SVM->get_Solution( solc , true );
+ SimpleConfiguration< int > physical( 3 );
+ auto sol = dynamic_cast< SVMBlockSolution * >(
+                                  f_SVM->get_Solution( & physical , true ) );
+ if( ! sol )
+  throw( std::logic_error( "SMOSolver::get_Solution: the SVMBlock did not "
+                           "return a SVMBlockSolution" ) );
 
- if( auto msol = dynamic_cast< SVMBlockSolution * >( sol ) ) {
-  // the multipliers are copied, since the Solver keeps its own for a re-solve
-  msol->set_dual_model( doubleVec( v_alpha ) , f_b );
-  return( msol );
-  }
+ // the multipliers are copied, the Solver keeping its own for a re-solve
+ sol->set_dual_model( doubleVec( v_alpha ) , f_b );
 
- delete sol;
-
- /* Anything else saves the abstract representation, which this Solver does
-  * not write into: the base class does the only thing that can be done, that
-  * is, write the solution into the Variable and ask the SVMBlock for it. */
-
- return( Solver::get_Solution( solc ) );
+ return( sol );
 
  }  // end( SMOSolver::get_Solution )
 

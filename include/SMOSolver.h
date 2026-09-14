@@ -223,22 +223,28 @@ class SMOSolver : public Solver
  /** Returns the solution of the last call to compute() as a Solution object,
   * or nullptr if there is none.
   *
-  * If what the Configuration asks for is a SVMBlockSolution, i.e., the
-  * trained model [see SVMBlockSolution], then it is built here out of the
-  * multipliers this Solver holds, without writing anything into the SVMBlock:
-  * no Variable is therefore required to exist, and the SVMBlock is not
-  * lock()-ed, so that any number of Solver attached to it can produce their
-  * own Solution at the same time.
+  * What comes back is always the SVMBlockSolution, i.e., the trained model
+  * [see SVMBlockSolution], built here out of the multipliers this Solver
+  * holds, without writing anything into the SVMBlock: no Variable is
+  * therefore required to exist, and the SVMBlock is not lock()-ed, so that
+  * any number of Solver attached to it can produce their own Solution at the
+  * same time. Whoever wants the model in the abstract representation writes
+  * the Solution into the SVMBlock [see SVMBlockSolution::write()], which is
+  * the one operation that needs the Variable.
   *
-  * Any other Solution saves (part of) the abstract representation instead,
-  * which only the SVMBlock can fill; the method of the base class is used
-  * then, which writes the solution into the Variable and asks the SVMBlock
-  * for it. Which one is asked for is not decided here: the SVMBlock is asked
-  * for an empty Solution, exactly as it would be in the end, and what it
-  * returns is what tells the two cases apart. */
+  * The Configuration is therefore not looked at: what it selects is which
+  * part of the solution information is wanted, and this Solver has one part
+  * to give. */
 
  [[nodiscard]] Solution * get_Solution( Configuration * solc = nullptr )
   override;
+/*--------------------------------------------------------------------------*/
+ /// the Solution is built from the data of the Solver, not from the Variable
+
+ [[nodiscard]] bool is_get_Solution_physical( void ) const override {
+  return( true );
+  }
+
 
 /*--------------------------------------------------------------------------*/
  /// returns a valid lower bound on the optimal objective function value

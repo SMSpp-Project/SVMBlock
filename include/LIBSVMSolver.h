@@ -185,15 +185,21 @@ class LIBSVMSolver : public Solver
  /// returns the trained model as a Solution, without going through the Block
  /** Returns the model found by the last call to compute() as a Solution
   * object, or nullptr if there is none. It works exactly as
-  * SMOSolver::get_Solution(): if what the Configuration asks for is the
-  * model, i.e., a SVMBlockSolution, then it is filled here out of the data
-  * of this Solver, without writing into the SVMBlock and hence without
-  * requiring any Variable to exist; anything else saves (part of) the
-  * abstract representation, which only the SVMBlock can fill, and is
-  * therefore left to the method of the base class. */
+  * SMOSolver::get_Solution(): what comes back is always the model, i.e., a
+  * SVMBlockSolution, filled here out of the data of this Solver, without
+  * writing into the SVMBlock and hence without requiring any Variable to
+  * exist; whoever wants the model in the abstract representation writes the
+  * Solution into the SVMBlock. */
 
  [[nodiscard]] Solution * get_Solution( Configuration * solc = nullptr )
   override;
+/*--------------------------------------------------------------------------*/
+ /// the Solution is built from the data of the Solver, not from the Variable
+
+ [[nodiscard]] bool is_get_Solution_physical( void ) const override {
+  return( true );
+  }
+
 
 /*--------------------------------------------------------------------------*/
  /// returns a valid lower bound on the optimal objective function value
