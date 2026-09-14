@@ -1868,25 +1868,32 @@ int main( int argc , char ** argv )
           ( sol->get_b() == svm.get_b() ) && sol->get_w().empty() ,
           "it is the model the Solver has found" );
 
-  /* Any other Solution saves the abstract representation, which only the
-   * SVMBlock can fill: it is generated now, and the default Configuration
-   * has to give the usual ColVariableSolution. */
+  /* What the Solver gives does not depend on the Configuration: the abstract
+   * representation is generated now, and even asked with the default one the
+   * answer is still the model, which is what a "physical" Solver has to give
+   * [see Solver::is_get_Solution_physical()]. */
   SimpleConfiguration< int > dual( SVMBlock::kWolfeDual );
   svm.generate_abstract_variables( & dual );
   svm.generate_abstract_constraints();
   svm.generate_objective();
 
-  auto other = solver->get_Solution();
-  check( dynamic_cast< ColVariableSolution * >( other ) ,
-         "any other Solution comes from the SVMBlock" );
+  check( solver->is_get_Solution_physical() ,
+         "the Solver says it does not go through the Variable" );
 
-  // whatever it is, it has to be the same model
+  auto other = dynamic_cast< SVMBlockSolution * >( solver->get_Solution() );
+  check( other , "the model comes back whatever is asked for" );
+
+  /* And it is the model: it goes back into the SVMBlock, from there into the
+   * Variable, and reading them gives it again, which is the trip whoever
+   * wants the solution in the abstract representation makes. */
   if( other ) {
    svm.set_dual_solution( doubleVec( svm.get_NDual() , 0 ) , 0 );
    other->write( & svm );
+   svm.set_solution_in_abstract();
+   svm.set_dual_solution( doubleVec( svm.get_NDual() , 0 ) , 0 );
    svm.get_solution_from_abstract();
    check_close( primal_value( & svm ) , solver->get_var_value() , 1e-8 ,
-                "the same model, whoever provides the Solution" );
+                "the same model, once the Solution is written in the Block" );
    }
 
   delete other;
