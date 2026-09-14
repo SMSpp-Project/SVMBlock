@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `SVMBlock::set_sparse_density()`, the density below which a sample is read
+  as the list of its nonzeroes rather than as m consecutive doubles: zero
+  reads them always dense and one always sparse, the default being the tenth
+  at which the merge of two lists stops paying. The value of the kernel is
+  the same either way, the entries the merge skips being zeroes, so that this
+  changes the time and not what any algorithm does
+
 ### Changed
 
 - the three Solver of the module answer `get_Solution()` with the

@@ -1633,6 +1633,20 @@ double SVMBlock::get_gamma( void ) const
 
 /*--------------------------------------------------------------------------*/
 
+void SVMBlock::set_sparse_density( double density )
+{
+ if( ( density < 0 ) || ( density > 1 ) )
+  throw( std::invalid_argument(
+      "SVMBlock::set_sparse_density: the density must be between 0 and 1" ) );
+
+ f_sparse_density = density;
+
+ drop_sparse();   // what is built was built under the previous one
+
+ }  // end( SVMBlock::set_sparse_density )
+
+/*--------------------------------------------------------------------------*/
+
 void SVMBlock::build_sparse( void ) const
 {
  f_sparse = 2;   // dense until the count says otherwise
@@ -1642,6 +1656,11 @@ void SVMBlock::build_sparse( void ) const
  v_Xv.clear();
  v_Xn2.clear();
 
+ // a density of zero is "read them dense whatever they hold", and the
+ // nonzeroes need not even be counted
+ if( ! f_sparse_density )
+  return;
+
  if( ( ! f_n ) || ( ! f_m ) || ( v_X.size() < std::size_t( f_n ) * f_m ) )
   return;
 
@@ -1650,10 +1669,10 @@ void SVMBlock::build_sparse( void ) const
   if( xi != 0 )
    ++nnz;
 
- /* A tenth of the entries is where the merge stops paying [see v_Xp]: above
-  * it the dense reading wins, and the lists would only cost the memory. */
+ /* Above the density that set_sparse_density() holds the dense reading wins,
+  * and the lists would only cost the memory. */
 
- if( double( nnz ) > 0.1 * double( f_n ) * double( f_m ) )
+ if( double( nnz ) > f_sparse_density * double( f_n ) * double( f_m ) )
   return;
 
  v_Xp.resize( f_n + 1 );

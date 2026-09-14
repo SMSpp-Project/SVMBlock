@@ -964,6 +964,22 @@ class SVMBlock : public Block
  double kernel( const double * x , const double * z ) const;
 
 /*--------------------------------------------------------------------------*/
+ /// below which density the samples are read as a list of nonzeroes
+ /** Sets the density below which kernel() reads a sample as the list of its
+  * nonzeroes rather than as \f$ m \f$ consecutive doubles: the dense
+  * reading costs \f$ m \f$ operations per evaluation whatever the data
+  * holds, the merge of two lists costs their nonzeroes, and which of the two
+  * wins is a property of the data (measured: at two per cent of density the
+  * merge is 11 times faster, at ten per cent 1.3, and at twenty per cent it
+  * is 2.6 times slower). Zero means that the samples are always read dense
+  * and one that they are always read sparse; the default is a tenth.
+  * The value of the kernel is the same either way, the entries that the
+  * merge skips being zeroes that contribute nothing to the sum, so that what
+  * this changes is the time and not what any algorithm does. */
+
+ void set_sparse_density( double density );
+
+/*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
  /// decides whether the samples are read sparse, and if so builds the lists
 
  void build_sparse( void ) const;
@@ -1384,12 +1400,11 @@ class SVMBlock : public Block
  /* The samples read as the list of their nonzeroes, which is how the kernel
   * of a sparse data set is computed: reading a sample dense costs m
   * operations per evaluation whatever the data holds, while merging the two
-  * lists costs their nonzeroes, and the second is worth it below about a
-  * tenth of density (measured: at two per cent it is 11 times faster, at ten
-  * per cent 1.3, at twenty per cent it is 2.6 times slower). The dense
-  * samples stay where they are and this is read by kernel() alone, being
-  * built when a kernel is first asked for and dropped whenever the data set
-  * changes. */
+  * lists costs their nonzeroes, and which of the two wins is a property of
+  * the data, the crossing point being the density that set_sparse_density()
+  * holds. The dense samples stay where they are and this is read by kernel()
+  * alone, being built when a kernel is first asked for and dropped whenever
+  * the data set, or that density, changes. */
 
  mutable IndexVec v_Xp;      ///< where the nonzeroes of each sample start
  mutable IndexVec v_Xi;      ///< the feature each nonzero belongs to
@@ -1398,6 +1413,9 @@ class SVMBlock : public Block
 
  /// 0 = not decided yet, 1 = the samples are read sparse, 2 = dense
  mutable char f_sparse = 0;
+
+ /// the density below which the samples are read sparse [see kernel()]
+ double f_sparse_density = 0.1;
  doubleVec v_y;              ///< the n targets
 
  double f_C = 1;             ///< the trade-off parameter C

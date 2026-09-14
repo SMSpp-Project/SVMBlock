@@ -2109,6 +2109,58 @@ int main( int argc , char ** argv )
    }
   }
 
+ // the two readings of a sample- - - - - - - - - - - - - - - - - - - - - - -
+
+ std::cout << "dense and sparse samples" << std::endl;
+ {
+  doubleVec X , y;
+  make_svc_data( 80 , 20 , X , y , 7 );
+
+  // a sample keeps a twentieth of its features, which is well inside the
+  // range where reading the nonzeroes pays [see SVMBlock::set_sparse_density]
+  std::mt19937 rng( 11 );
+  std::uniform_real_distribution< double > coin( 0 , 1 );
+  for( auto & xi : X )
+   if( coin( rng ) > 0.05 )
+    xi = 0;
+
+  for( auto kernel : { SVMBlock::kLinear , SVMBlock::kPoly ,
+                       SVMBlock::kSigmoid , SVMBlock::kGaussian ,
+                       SVMBlock::kLaplacian } ) {
+   SVCBlock dense , sparse;
+   for( auto svm : { & dense , & sparse } ) {
+    svm->set_kernel( kernel , 0.5 );
+    svm->set_C( 1 );
+    svm->load( 80 , 20 , X , y );
+    }
+
+   dense.set_sparse_density( 0 );    // never read them sparse
+   sparse.set_sparse_density( 1 );   // always read them sparse
+
+   const std::string tag = "kernel " + std::to_string( kernel );
+
+   /* The kernels that are a function of the inner product agree to the bit,
+    * the merge skipping products that are zero and adding zero to a sum
+    * leaving it where it is; the other two rewrite the norm, hence they
+    * agree to the rounding of that rewriting and no further. */
+
+   const double tol = ( ( kernel == SVMBlock::kGaussian ) ||
+                        ( kernel == SVMBlock::kLaplacian ) ) ? 1e-14 : 0;
+   bool same = true;
+   for( Index i = 0 ; i < 80 ; ++i )
+    for( Index j = 0 ; j < 80 ; ++j ) {
+     const double a = dense.kernel( i , j ) , b = sparse.kernel( i , j );
+     if( std::abs( a - b ) > tol * ( 1 + std::abs( b ) ) )
+      same = false;
+     }
+
+   check( same , "the same kernel read dense and read sparse, " + tag );
+
+   check_close( train( & dense ) , train( & sparse ) , 1e-12 ,
+                "the same optimal value either way, " + tag );
+   }
+  }
+
  // the result- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
  if( failed )
