@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- the three Solver of the module answer `get_Solution()` with the
+  `SVMBlockSolution`, i.e., the trained model, whatever the Configuration
+  asks for, and say so in `is_get_Solution_physical()`: a Solver that has the
+  model and no abstract representation to fill has one part of the solution
+  information to give, and whoever wants it in the Variable writes the
+  Solution into the SVMBlock
+
 - the restore of the active set, which the shrinking takes every so often so
   that a collapsed one cannot grind, costs what it should: the pair is
   selected out of the whole index space again for one pass rather than for a
