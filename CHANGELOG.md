@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- the lists of the nonzeroes are built before the threads that fill the Gram
+  matrix are started, and not by whichever of them asks for a kernel first:
+  they all ask at once, and they were all building them, which corrupts the
+  heap. The value of gamma derived from the data was already resolved there
+  for the same reason
+
 ## [0.2.0] - 2026-09-13
 
 ### Added

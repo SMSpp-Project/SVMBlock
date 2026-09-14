@@ -1807,6 +1807,12 @@ SVMBlock::c_doubleVec & SVMBlock::get_K( void ) const
  if( f_kernel != kLinear )
   get_gamma();
 
+ // and so are the lists of the nonzeroes, for the same reason: kernel()
+ // builds them the first time it is asked for one, and the threads below
+ // would all be asking at once [see build_sparse()]
+ if( ! f_sparse )
+  build_sparse();
+
  /* One row per iteration, each writing the upper part of its own row and the
   * corresponding part of the symmetric column, so that every entry is written
   * exactly once. The rows have very different lengths, whence the dynamic
