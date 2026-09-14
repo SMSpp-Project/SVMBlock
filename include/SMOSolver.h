@@ -533,8 +533,10 @@ class SMOSolver : public Solver
  /// puts back into the active set everything that had been taken out
  /** Restores the whole index space, recomputing the gradient of what had
   * been left out, which the steps taken in the meantime have made stale:
-  * G = Q alpha + q costs one row of the Gram matrix per *nonzero* multiplier
-  * rather than one per index restored. */
+  * G = Q alpha + q costs one row of the Gram matrix per multiplier that is
+  * nonzero and not at its upper bound, rather than one per index restored,
+  * plus one per multiplier that has reached the upper bound or left it
+  * since the previous restore [see v_Gb]. */
 
  void unshrink( void );
 
@@ -702,6 +704,22 @@ class SMOSolver : public Solver
  doubleVec v_G;                ///< the gradient of the dual at them
 
  doubleVec v_QD;               ///< the diagonal of the Hessian of the dual
+
+ /* What the multipliers that sit at their upper bound contribute to the
+  * gradient: the restore of the active set reads a row of the Gram matrix
+  * per nonzero multiplier [see unshrink()], and on a data set where most of
+  * them are at the bound this is almost all of what a solve costs, while
+  * their contribution changes only when one of them arrives at the bound or
+  * leaves it. It is therefore kept from one restore to the next, brought up
+  * to date with one row per multiplier whose side has changed, which are
+  * far fewer; v_Gb_at says which ones it counts, so that the difference is
+  * read off it rather than recorded as it happens. Both are indexed by dual
+  * index in the current order, hence exchanged by swap_index(), and both
+  * are empty when the multipliers have no upper bound and until the first
+  * restore asks for them. */
+
+ doubleVec v_Gb;               ///< the contribution of the bounded ones
+ std::vector< char > v_Gb_at;  ///< which multipliers v_Gb counts
 
  /* The active set is a *prefix* of the current order of the dual indices:
   * shrinking an index is exchanging it with the last active one, which keeps

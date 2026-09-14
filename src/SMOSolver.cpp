@@ -1416,6 +1416,11 @@ void SMOSolver::swap_index( Index a , Index b )
  std::swap( v_di_c[ a ] , v_di_c[ b ] );
  std::swap( v_perm[ a ] , v_perm[ b ] );
 
+ if( ! v_Gb.empty() ) {
+  std::swap( v_Gb[ a ] , v_Gb[ b ] );
+  std::swap( v_Gb_at[ a ] , v_Gb_at[ b ] );
+  }
+
  }  // end( SMOSolver::swap_index )
 
 /*--------------------------------------------------------------------------*/
@@ -1489,15 +1494,44 @@ void SMOSolver::unshrink( void )
  /* The gradient of what has been left out is stale, the steps taken in the
   * meantime having skipped it: G = Q alpha + q is recomputed here, one row
   * of the Gram matrix per *nonzero* multiplier rather than one per index
-  * restored, since a multiplier that is zero contributes nothing. */
+  * restored, since a multiplier that is zero contributes nothing. Of the
+  * nonzero ones, those at their upper bound are counted apart in v_Gb,
+  * which survives from the previous restore: what it costs here is one row
+  * per multiplier that has arrived at the bound or left it since, and those
+  * are few against the ones that sit there. */
 
- for( Index k = f_act ; k < f_N ; ++k )
-  v_G[ k ] = f_dq[ k ] + f_d * v_alpha[ k ];
+ if( f_u < Inf< double >() ) {
+  if( v_Gb.size() != std::size_t( f_N ) ) {
+   v_Gb.assign( f_N , 0 );
+   v_Gb_at.assign( f_N , 0 );   // it counts nobody, and the loop below
+   }                            // then reads the row of everyone at a bound
+
+  for( Index l = 0 ; l < f_N ; ++l ) {
+   const char at = ( v_alpha[ l ] >= f_u ) ? 1 : 0;
+   if( at == v_Gb_at[ l ] )
+    continue;
+
+   const double cl = ( at ? f_ds[ l ] : - f_ds[ l ] ) * f_u / f_rw;
+   const double * Kl = f_SVM->get_K_row_full( f_di[ l ] );
+
+   for( Index k = 0 ; k < f_N ; ++k )
+    v_Gb[ k ] += f_ds[ k ] * ( Kl[ f_di[ k ] ] + f_rb ) * cl;
+
+   v_Gb_at[ l ] = at;
+   }
+  }
+
+ if( v_Gb.empty() )
+  for( Index k = f_act ; k < f_N ; ++k )
+   v_G[ k ] = f_dq[ k ] + f_d * v_alpha[ k ];
+ else
+  for( Index k = f_act ; k < f_N ; ++k )
+   v_G[ k ] = f_dq[ k ] + f_d * v_alpha[ k ] + v_Gb[ k ];
 
  for( Index l = 0 ; l < f_N ; ++l ) {
   const double al = v_alpha[ l ];
-  if( ! al )
-   continue;
+  if( ( ! al ) || ( ! v_Gb.empty() && v_Gb_at[ l ] ) )
+   continue;   // zero contributes nothing, and the bounded ones are in v_Gb
 
   const double cl = f_ds[ l ] * al / f_rw;
   const double * Kl = f_SVM->get_K_row_full( f_di[ l ] );
@@ -1580,6 +1614,14 @@ int SMOSolver::solve_with_equality( void )
  f_act = f_N;
  f_SVM->set_K_active( nullptr , 0 );
 
+ /* The multipliers are whatever the previous call, the path or the
+  * realignment have left, and so is the Gram matrix: what the bounded ones
+  * contribute is therefore built again by the first restore of this call
+  * [see unshrink()], rather than carried across a change of either. */
+
+ v_Gb.clear();
+ v_Gb_at.clear();
+
  // the bias interval of the previous iteration, which is what the shrinking
  // is decided on; the first one shrinks nothing, there being no interval yet
  double pm = Inf< double >() , pM = - Inf< double >();
@@ -1612,8 +1654,18 @@ int SMOSolver::solve_with_equality( void )
    counter = period;
 
    if( ( f_act < f_N ) && ( ++passes >= f_patience ) ) {
+    /* What the restore is for is that the pair is selected out of the
+     * whole index space again, and one pass at full width does that: the
+     * period is therefore thrown away together with the interval, so that
+     * the shrinking decides again as soon as a new one is there. A pass at
+     * full width reads two rows as wide as the data set, against the two as
+     * wide as the active set that every other pass reads, which is why
+     * there is exactly one of them. */
     unshrink();
     passes = 0;
+    counter = 0;
+    pm = Inf< double >();
+    pM = - Inf< double >();
     }
    else
     shrink( pm , pM );
@@ -1793,6 +1845,10 @@ int SMOSolver::solve_box( void )
  f_act = f_N;
  f_SVM->set_K_active( nullptr , 0 );
 
+ // as in solve_with_equality(), the bounded ones are counted again
+ v_Gb.clear();
+ v_Gb_at.clear();
+
  // the largest violation of the previous iteration, which is what the
  // shrinking is decided on; the first one shrinks nothing
  double pv = - Inf< double >();
@@ -1813,8 +1869,12 @@ int SMOSolver::solve_box( void )
    counter = period;
 
    if( ( f_act < f_N ) && ( ++passes >= f_patience ) ) {
+    // one pass at full width is what the restore is for [see
+    // solve_with_equality()]
     unshrink();
     passes = 0;
+    counter = 0;
+    pv = - Inf< double >();
     }
    else
     shrink_box( pv );

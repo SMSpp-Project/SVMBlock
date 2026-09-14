@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- the restore of the active set, which the shrinking takes every so often so
+  that a collapsed one cannot grind, costs what it should: the pair is
+  selected out of the whole index space again for one pass rather than for a
+  whole period of them, each of which would read a row of the Gram matrix as
+  wide as the data set, and the gradient it recomputes no longer reads one
+  such row per nonzero multiplier. Those that sit at their upper bound
+  contribute the same thing until they leave it, so their part is kept from
+  one restore to the next and brought up to date with one row per multiplier
+  that has changed side, as `LIBSVM` does. On `w8a` under a budget of 200 MB
+  for the rows this is 2.0 billion evaluations of the kernel against 252
+  million, i.e., 18 seconds against 101
+
 ### Fixed
 
 ## [0.2.0] - 2026-09-13
