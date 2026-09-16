@@ -1440,9 +1440,19 @@ void SVMBlock::update_abstract_bounds( ModParam issueAMod )
 
  const double ub = get_ub();
 
+ // every box changes together when C does: they travel as one group
+ const Index num = std::count_if( v_box.begin() , v_box.end() ,
+                                 [ ub ]( auto & bx ) {
+                                  return( bx.get_rhs() != ub );
+                                  } );
+ if( ! num )
+  return;
+
+ const auto iAM = open_if_needed( un_ModBlock( issueAMod ) , num );
  for( auto & bx : v_box )
   if( bx.get_rhs() != ub )
-   bx.set_rhs( ub , un_ModBlock( issueAMod ) );
+   bx.set_rhs( ub , iAM );
+ close_if_needed( iAM , num );
 
  }  // end( SVMBlock::update_abstract_bounds )
 
@@ -1461,12 +1471,22 @@ void SVMBlock::update_abstract_sides( ModParam issueAMod )
   return;
   }
 
+ Index num = 0;
  Index k = 0;
+ for( auto & ck : v_cons )
+  if( ck.get_lhs() != - v_dq[ k++ ] )
+   ++num;
+ if( ! num )
+  return;
+
+ const auto iAM = open_if_needed( un_ModBlock( issueAMod ) , num );
+ k = 0;
  for( auto & ck : v_cons ) {
   if( ck.get_lhs() != - v_dq[ k ] )
-   ck.set_lhs( - v_dq[ k ] , un_ModBlock( issueAMod ) );
+   ck.set_lhs( - v_dq[ k ] , iAM );
   ++k;
   }
+ close_if_needed( iAM , num );
 
  }  // end( SVMBlock::update_abstract_sides )
 
