@@ -520,8 +520,8 @@ static void check_change( const std::string & kind , int form ,
  check_close( objective_value( a ) , objective_value( b ) , 1e-9 ,
               what + ": the same Objective as if generated anew" );
 
- bool ok = ( a->get_dynamic_constraints().size() ==
-             b->get_dynamic_constraints().size() );
+ bool ok = ( a->get_dynamic_constraint_groups().size() ==
+             b->get_dynamic_constraint_groups().size() );
 
  if( form == SVMBlock::kWolfeDual ) {
   auto ba = a->get_dynamic_constraint< LB0Constraint >( "box" );
@@ -1182,8 +1182,8 @@ int main( int argc , char ** argv )
          ( ! ben.get_dynamic_variable< ColVariable >( "alpha" ) ) ,
          "the master has the model and no slack" );
 
-  check( ben.get_static_constraints().empty() &&
-         ben.get_dynamic_constraints().empty() ,
+  check( ben.get_static_constraint_groups().empty() &&
+         ben.get_dynamic_constraint_groups().empty() ,
          "the master has no Constraint, the model being free" );
 
   // every dual index is in exactly one chunk, with its slack and its margin
