@@ -20,7 +20,7 @@ DIR = .
 CC = clang++
 
 # common flags
-COMMON_SW = -std=c++17 -ferror-limit=1 -Wno-enum-compare -DCLANG_1200_0_32_27_PATCH
+COMMON_SW = -std=c++17 -ferror-limit=1 -Wno-enum-compare
 
 # debug switches
 SW_DEBUG = -g3 -glldb -fno-inline $(COMMON_SW)
