@@ -24,6 +24,12 @@
 
 #include <algorithm>
 
+#include <cstdlib>
+
+#include <cstring>
+
+#include <iostream>
+
 #include <string>
 
 /*--------------------------------------------------------------------------*/
@@ -46,7 +52,28 @@ SMSpp_insert_in_factory_cpp_1( LIBSVMSolver );
 
 /// what LIBSVM prints its log with when it has to print nothing
 
-static void silence( const char * ) {}
+/* LIBSVM reports how many iterations it took by printing it, there being no
+ * accessor for it: the string it prints is read here, so that a comparison
+ * can say whether a difference is in the iterations or in what each of them
+ * costs. The print function is a callback of the library, which carries
+ * nothing of the caller, and it is called by svm_train() in the thread that
+ * calls it; the count is therefore thread-local, so that Solver of different
+ * SVMBlock run in parallel threads each read their own. */
+
+static thread_local long f_LIBSVM_iterations = 0;
+static thread_local bool f_LIBSVM_verbose = false;
+
+static void read_iterations( const char * s )
+{
+ if( ! s )
+  return;
+
+ if( const char * p = std::strstr( s , "#iter = " ) )
+  f_LIBSVM_iterations += std::atol( p + 8 );
+
+ if( f_LIBSVM_verbose )
+  std::cout << s << std::flush;
+ }
 
 /*--------------------------------------------------------------------------*/
 /*--------------------- DERIVED METHODS OF BASE CLASS ----------------------*/
@@ -116,11 +143,14 @@ int LIBSVMSolver::compute( bool changedvars )
                                 "problem: " + msg ) );
   }
 
- svm_set_print_string_function( f_log_verb ? nullptr : & silence );
+ f_LIBSVM_verbose = bool( f_log_verb );
+ svm_set_print_string_function( & read_iterations );
+ f_LIBSVM_iterations = 0;
 
  f_solved = false;
  free_model();
  f_model = svm_train( & f_prob , & f_par );
+ f_iterations = f_LIBSVM_iterations;
 
  if( ! f_model ) {
   unlock();

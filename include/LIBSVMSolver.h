@@ -174,6 +174,16 @@ class LIBSVMSolver : public Solver
  bool has_var_solution( void ) override { return( f_solved ); }
 
 /*--------------------------------------------------------------------------*/
+ /// the iterations of the last call to compute()
+ /** How many iterations the last call to compute() took, as LIBSVM reports
+  * them: the library has no accessor for the count, which it only prints,
+  * hence what is returned here is read out of what it prints. */
+
+ [[nodiscard]] long get_elapsed_iterations( void ) const override {
+  return( f_iterations );
+  }
+
+/*--------------------------------------------------------------------------*/
  /// writes the multipliers and the bias into the SVMBlock
  /** Writes the model found by the last call to compute() into the SVMBlock,
   * both into its "physical" solution [see SVMBlock::set_dual_solution()] and,
@@ -363,6 +373,7 @@ class LIBSVMSolver : public Solver
 
  double f_tol = 1e-3;          ///< tolerance on the optimality conditions
  double f_cache = 100;         ///< size of the kernel cache, in MB
+ long f_iterations = 0;        ///< iterations of the last call to compute()
  int f_shrink = 1;             ///< nonzero to use the shrinking heuristic
  int f_log_verb = 0;           ///< nonzero for LIBSVM to print its log
 

@@ -1419,15 +1419,35 @@ void SVMBlock::update_abstract( unsigned char what , ModParam issueMod ,
   return;
   }
 
+ /* A change of one hyper-parameter can touch the bounds, the sides and the
+  * Objective at once, and each of the three issues its own Modification, or
+  * its own group of them: they are packed in one channel, so that whoever
+  * receives them receives the whole change as a single group, with the
+  * groups of each piece nested into it. */
+
+ unsigned int pieces = 0;
  if( AR & HasCns ) {
   if( what & eARBounds )
-   update_abstract_bounds( issueAMod );
+   ++pieces;
   if( what & eARSides )
-   update_abstract_sides( issueAMod );
+   ++pieces;
+  }
+ if( ( what & eARObjective ) && ( AR & HasObj ) )
+  ++pieces;
+
+ const auto iAM = open_if_needed( issueAMod , pieces );
+
+ if( AR & HasCns ) {
+  if( what & eARBounds )
+   update_abstract_bounds( iAM );
+  if( what & eARSides )
+   update_abstract_sides( iAM );
   }
 
  if( ( what & eARObjective ) && ( AR & HasObj ) )
-  update_abstract_objective( issueAMod );
+  update_abstract_objective( iAM );
+
+ close_if_needed( iAM , pieces );
 
  }  // end( SVMBlock::update_abstract )
 
@@ -1519,13 +1539,17 @@ void SVMBlock::update_abstract_objective( ModParam issueAMod )
 
   /* The diagonal and the linear coefficients of a QuadFunction are those of
    * the DQuadFunction it derives from, whence they are set through the
-   * latter; the off-diagonal terms, which it adds, are left alone. */
-  static_cast< DQuadFunction * >( f_obj.get_function()
-   )->modify_terms( quad.begin() , lin.begin() , Range( 0 , N ) ,
-                    un_ModBlock( issueAMod ) );
+   * latter; the off-diagonal terms, which it adds, are left alone. The
+   * terms and the constant travel together, being one change. */
+  const auto iAM = open_if_needed( un_ModBlock( issueAMod ) , 2 );
 
   static_cast< DQuadFunction * >( f_obj.get_function()
-   )->set_constant_term( get_dual_constant() , un_ModBlock( issueAMod ) );
+   )->modify_terms( quad.begin() , lin.begin() , Range( 0 , N ) , iAM );
+
+  static_cast< DQuadFunction * >( f_obj.get_function()
+   )->set_constant_term( get_dual_constant() , iAM );
+
+  close_if_needed( iAM , 2 );
   return;
   }
 
@@ -1970,20 +1994,25 @@ const double * SVMBlock::K_row( Index i , bool full ) const
  if( i >= f_n )
   throw( std::invalid_argument( "SVMBlock::get_K_row: no such row" ) );
 
- // the whole matrix is there, or fits in the budget: read it out of it
+ // whoever asked for the whole matrix has it: read the row out of it
  if( v_K.size() == std::size_t( f_n ) * f_n )
   return( v_K.data() + std::size_t( i ) * f_n );
 
- const double whole = double( f_n ) * double( f_n ) * sizeof( double );
- if( whole <= f_K_memory )
-  return( get_K().data() + std::size_t( i ) * f_n );
-
- /* The cache: as many rows as the budget pays for, and never fewer than the
+ /* A budget that would pay for the whole matrix is not a reason to compute
+  * it: what decides is how many of its rows the algorithm reads, which is a
+  * fraction of them whenever the support set is one, and the cache pays for
+  * the rows that are read alone. A budget above the matrix simply means that
+  * the cache never evicts anything, i.e., that the matrix is built as it is
+  * read and once. The whole of it is computed only for whoever asks for the
+  * whole of it [see get_K()].
+  *
+  * The cache: as many rows as the budget pays for, and never fewer than the
   * two an algorithm holds while it updates along a pair. */
 
  if( ! f_K_slots ) {
   const double room = f_K_memory / ( double( f_n ) * sizeof( double ) );
-  f_K_slots = std::max< Index >( 2 , Index( room ) );
+  // more slots than rows is memory that nothing can ever use
+  f_K_slots = std::min( f_n , std::max< Index >( 2 , Index( room ) ) );
   v_K_cache.resize( std::size_t( f_K_slots ) * f_n );
   v_K_slot.assign( f_K_slots , f_n );   // f_n = "this slot holds nothing"
   f_K_words = ( std::size_t( f_n ) + 63 ) / 64;

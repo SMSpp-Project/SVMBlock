@@ -1528,17 +1528,50 @@ void SMOSolver::unshrink( void )
   for( Index k = f_act ; k < f_N ; ++k )
    v_G[ k ] = f_dq[ k ] + f_d * v_alpha[ k ] + v_Gb[ k ];
 
- for( Index l = 0 ; l < f_N ; ++l ) {
-  const double al = v_alpha[ l ];
-  if( ( ! al ) || ( ! v_Gb.empty() && v_Gb_at[ l ] ) )
-   continue;   // zero contributes nothing, and the bounded ones are in v_Gb
+ /* What is left is the contribution of the multipliers that are neither
+  * zero nor at a bound, and it can be had in two ways: a row of each of
+  * them, read at full width, or a row of each index that is being restored,
+  * read at the width of the active set alone. Which of the two is cheaper
+  * is a property of the moment, the first costing one kernel evaluation per
+  * free multiplier and index of the data set and the second one per index
+  * restored and index of the active set, so the count decides. */
 
-  const double cl = f_ds[ l ] * al / f_rw;
-  const double * Kl = f_SVM->get_K_row_full( f_di[ l ] );
+ Index nfree = 0;
+ for( Index l = 0 ; l < f_N ; ++l )
+  if( v_alpha[ l ] && ! ( ! v_Gb.empty() && v_Gb_at[ l ] ) )
+   ++nfree;
 
-  for( Index k = f_act ; k < f_N ; ++k )
-   v_G[ k ] += f_ds[ k ] * ( Kl[ f_di[ k ] ] + f_rb ) * cl;
+ if( nfree * f_N > 2 * f_act * ( f_N - f_act ) ) {
+  /* The rows of the indices being restored, at the width of the active set:
+   * the free multipliers all live there, the ones outside it being at a
+   * bound by construction. */
+
+  for( Index k = f_act ; k < f_N ; ++k ) {
+   const double * Kk = f_SVM->get_K_row( f_di[ k ] );
+   double sum = 0;
+
+   for( Index l = 0 ; l < f_act ; ++l ) {
+    const double al = v_alpha[ l ];
+    if( ( ! al ) || ( ! v_Gb.empty() && v_Gb_at[ l ] ) )
+     continue;
+    sum += ( Kk[ f_di[ l ] ] + f_rb ) * f_ds[ l ] * al;
+    }
+
+   v_G[ k ] += f_ds[ k ] * sum / f_rw;
+   }
   }
+ else
+  for( Index l = 0 ; l < f_N ; ++l ) {
+   const double al = v_alpha[ l ];
+   if( ( ! al ) || ( ! v_Gb.empty() && v_Gb_at[ l ] ) )
+    continue;   // zero contributes nothing, and the bounded ones are in v_Gb
+
+   const double cl = f_ds[ l ] * al / f_rw;
+   const double * Kl = f_SVM->get_K_row_full( f_di[ l ] );
+
+   for( Index k = f_act ; k < f_N ; ++k )
+    v_G[ k ] += f_ds[ k ] * ( Kl[ f_di[ k ] ] + f_rb ) * cl;
+   }
 
  f_act = f_N;
  f_SVM->set_K_active( nullptr , 0 );

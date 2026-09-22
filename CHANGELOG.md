@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `LIBSVMSolver::get_elapsed_iterations()`, how many iterations the last call
+  to `compute()` took: the library has no accessor for the count, which it
+  only prints, hence what is returned is read out of what it prints, which is
+  what makes a comparison able to say whether a difference is in the
+  iterations or in what each of them costs
+
 - `SVMBlock::set_sparse_density()`, the density below which a sample is read
   as the list of its nonzeroes rather than as m consecutive doubles: zero
   reads them always dense and one always sparse, the default being the tenth
@@ -17,6 +23,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes the time and not what any algorithm does
 
 ### Changed
+
+- a budget that would pay for the whole Gram matrix is no longer a reason to
+  compute it: what decides is how many of its rows the algorithm reads, which
+  is a fraction of them whenever the support set is one, so the rows are
+  computed as they are read and a budget above the matrix simply means that
+  the cache never evicts anything. On `rcv1` (20\,242 samples, whose matrix
+  is 3.3 GB) under a budget of 4 GB this is 45.2 seconds against 90.5, the
+  optimal value being the same; the whole matrix is still built for whoever
+  asks for the whole of it, such as the abstract representation of the dual
+
+- the restore of the active set recomputes the gradient in whichever of the
+  two ways costs less at that moment: a row of each multiplier that is
+  neither zero nor at a bound, read at full width, or a row of each index
+  being restored, read at the width of the active set alone. The count of the
+  kernel evaluations the two ask for decides, the first being one per free
+  multiplier and index of the data set and the second one per index restored
+  and index of the active set
+
+- the changes of the abstract representation that one setter causes travel as
+  a single group: a hyper-parameter can touch the bounds, the sides and the
+  Objective at once, and each of the three used to issue its own, so that
+  whoever receives them now receives the whole change in one pass, with the
+  group of each piece nested into it
 
 - the three Solver of the module answer `get_Solution()` with the
   `SVMBlockSolution`, i.e., the trained model, whatever the Configuration
