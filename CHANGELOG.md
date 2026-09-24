@@ -26,19 +26,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - the tester reads the groups of Variable and of Constraint of the Block, the
   vectors of `boost::any` it used to read not being there any more
+
 - the makefile asks for `-O3 -DNDEBUG` and nothing else, the macro of the
   patch for `boost::any` on macOS having no reason to be there since there is
   no `boost::any` left in the core
+
 - whoever links the module keeps it: the classes of a module register
   themselves in the factory from a static initialiser, and a linker that
   drops what looks unused takes the registration away with it, so the target
   now tells whoever links it to keep the symbol that forces the module in,
   and on ELF, where naming the symbol is not enough, the library as a whole
+
 - a budget that would pay for the whole Gram matrix is no longer a reason to
   compute it: what decides is how many of its rows the algorithm reads, which
   is a fraction of them whenever the support set is one, so the rows are
   computed as they are read and a budget above the matrix simply means that
-  the cache never evicts anything. On `rcv1` (20\,242 samples, whose matrix
+  the cache never evicts anything. On `rcv1` (20242 samples, whose matrix
   is 3.3 GB) under a budget of 4 GB this is 45.2 seconds against 90.5, the
   optimal value being the same; the whole matrix is still built for whoever
   asks for the whole of it, such as the abstract representation of the dual
