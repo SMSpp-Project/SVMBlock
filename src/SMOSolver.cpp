@@ -1049,9 +1049,11 @@ int SMOSolver::follow_path( Index c , double to )
   if( S.empty() && ( ! f_rb ) ) {
    /* No multiplier can absorb the movement of c and keep s^T alpha where it
     * is: what moves is the bias alone, until some index stops satisfying its
-    * own condition and becomes free, and from there the walk resumes. */
+    * own condition and becomes free, and from there the walk resumes. The
+    * bias moves as dir * s_c, which raises h_c when alpha_c is to grow and
+    * lowers it when alpha_c is to be driven to zero. */
 
-   const double bdir = ( hc < 0 ) ? f_ds[ c ] : - f_ds[ c ];
+   const double bdir = dir * f_ds[ c ];
    double mag = Inf< double >();
    Index who = f_N;
 
@@ -1067,11 +1069,14 @@ int SMOSolver::follow_path( Index c , double to )
     if( ( t > dPZero ) && ( t < mag ) ) { mag = t; who = k; }
     }
 
-   // the bias only has to move until c is happy, if that comes first
-   const double tc = - hc / ( f_ds[ c ] * bdir );
-   if( ( tc > 0 ) && ( tc <= mag ) ) {
-    f_b += bdir * tc;
-    return( kOK );
+   // when learning, the bias only has to move until c is happy, if that
+   // comes first; when unlearning the target is alpha_c = 0, not h_c = 0
+   if( dir > 0 ) {
+    const double tc = - hc / ( f_ds[ c ] * bdir );
+    if( ( tc > 0 ) && ( tc <= mag ) ) {
+     f_b += bdir * tc;
+     return( kOK );
+     }
     }
 
    if( who == f_N )   // nothing stops the bias: the dual is unbounded

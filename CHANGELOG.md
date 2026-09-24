@@ -81,6 +81,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- when no multiplier can absorb the movement of the index being learnt or
+  unlearnt, `SMOSolver` moves the bias in the direction of that movement,
+  i.e., raising the margin of the index when its multiplier is to grow and
+  lowering it when the multiplier is to be driven to zero, and stops early
+  only when learning; when unlearning, the direction was that of learning and
+  the walk could stop as soon as the margin of the index was met, with the
+  multiplier still positive
+
 - the lists of the nonzeroes are built before the threads that fill the Gram
   matrix are started, and not by whichever of them asks for a kernel first:
   they all ask at once, and they were all building them, which corrupts the
