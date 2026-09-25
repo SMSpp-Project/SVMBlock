@@ -81,6 +81,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- the step that fetches the data archive of this module says what went wrong
+  when it goes wrong: the download is checked, an archive that did not arrive
+  is removed instead of being left on disk for the build to take for the real
+  one, and the message names the URL. A server that answers with an error page
+  used to leave a file of a few bytes there, which made the next build fail
+  while extracting it, with the message of `tar` and no mention of the
+  download
+
 - when no multiplier can absorb the movement of the index being learnt or
   unlearnt, `SMOSolver` moves the bias in the direction of that movement,
   i.e., raising the margin of the index when its multiplier is to grow and
