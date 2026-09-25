@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- the data archive is downloaded by version: `DATA_VERSION` in CMakeLists.txt
+  names the version of the Package Registry to read, and the archive and the
+  marker of its extraction carry it in their name, so that a tree holding
+  an older extraction (the cache of the CI, or a clone extracted before)
+  downloads and extracts again instead of running on the old data;
+  data/upload-libsvm publishes the archive under that version
+
 - a file in the sparse format of LIBSVM may carry any two labels (e.g., 0 and
   1, or 2 and 4), as LIBSVM itself accepts: `SVCBlock` turns the smaller into
   -1 and the larger into +1, and rejects more than two

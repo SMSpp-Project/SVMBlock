@@ -67,8 +67,8 @@ ehthumbs.db
 # --- Project-specific ---------------------------------------
 # the LIBSVM data sets (downloaded/extracted on demand)
 data/libsvm
-data/libsvm.tgz
-data/.extracted
+data/libsvm*.tgz
+data/.extracted*
 
 # the properties of the machine, measured at the first compilation
 include/SVMBlockArch.h
