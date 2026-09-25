@@ -268,7 +268,7 @@ void LIBLINEARSolver::build_problem( void )
   start[ i ] = v_node.size();
   auto xi = f_SVM->get_x( i );
   for( Index j = 0 ; j < m ; ++j )
-   if( xi[ j ] != 0 )
+   if( ( xi[ j ] != 0 ) && f_SVM->is_active_feature( j ) )
     v_node.push_back( feature_node{ int( j ) + 1 , xi[ j ] } );
   v_node.push_back( feature_node{ int( m ) + 1 , 1 } );
   v_node.push_back( feature_node{ -1 , 0 } );

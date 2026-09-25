@@ -69,3 +69,7 @@ ehthumbs.db
 data/libsvm
 data/libsvm.tgz
 data/.extracted
+
+# the properties of the machine, measured at the first compilation
+include/SVMBlockArch.h
+tools/svm_arch

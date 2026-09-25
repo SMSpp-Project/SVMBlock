@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `SVMBlock::set_active_features()`, which features the kernel reads: the
+  samples stay where they are and an inactive feature counts as a column of
+  zeroes, in the Gram matrix, in the coefficients of the model in the primal
+  and in the weights the dual gives back, so that a selection of the features
+  is a change of the training problem and not a copy of the data set. With the
+  linear kernel switching one off is a rank-one change of the Hessian of the
+  dual, which `SMOSolver` follows by correcting the gradient in `O( N )`
+  operations per feature rather than starting over
+
 - `LIBSVMSolver::get_elapsed_iterations()`, how many iterations the last call
   to `compute()` took: the library has no accessor for the count, which it
   only prints, hence what is returned is read out of what it prints, which is
@@ -23,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes the time and not what any algorithm does
 
 ### Changed
+
+- a file in the sparse format of LIBSVM may carry any two labels (e.g., 0 and
+  1, or 2 and 4), as LIBSVM itself accepts: `SVCBlock` turns the smaller into
+  -1 and the larger into +1, and rejects more than two
+
+- `dblLSVMCache 0` gives LIBSVM the budget the SVMBlock gives its own cache of
+  the Gram matrix, so that LIBSVM and `SMOSolver` can be compared with the
+  same memory; the default stays at the 100 MB of LIBSVM
 
 - the tester reads the groups of Variable and of Constraint of the Block, the
   vectors of `boost::any` it used to read not being there any more

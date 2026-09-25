@@ -468,6 +468,18 @@ class SMOSolver : public Solver
  bool resample( void );
 
 /*--------------------------------------------------------------------------*/
+ /// realigns the gradient to a change of the set of the active features
+ /** Realigns the gradient of the dual to a change of the set of the features
+  * the kernel reads, which with the linear kernel is a rank-one change of the
+  * Hessian for each feature that has been switched off or back on, and is
+  * therefore followed in $ O( N | J | ) $ operations, $ J $ being the
+  * features whose state has changed. Returns false with any other kernel,
+  * whose Gram matrix changes in a way that only computing it again
+  * describes. */
+
+ bool resync_features( void );
+
+/*--------------------------------------------------------------------------*/
  /// reads the data of the dual out of the SVMBlock, starting from the origin
 
  void reload( void );
@@ -757,6 +769,13 @@ class SMOSolver : public Solver
  doubleVec v_s;                ///< the N signs
  doubleVec v_q;                ///< the N linear coefficients
  IndexVec v_di_c;              ///< the N sample indices, copied
+
+ /* The active features of the SVMBlock, copied for the same reason: which
+  * ones have been switched off, or back on, is read as the difference
+  * between this and the current ones [see resync_features()]. Empty when all
+  * the features are active, exactly as in the SVMBlock. */
+
+ IndexVec v_afeat_c;           ///< the active features, copied
 
  /* Which sample of the data set this Solver is aligned to each sample of the
   * current one was, Inf< Index >() for a sample that has been added since;

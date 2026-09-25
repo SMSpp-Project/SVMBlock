@@ -57,6 +57,47 @@ namespace SMSpp_di_unipi_it
  *  @{ */
 
 /*--------------------------------------------------------------------------*/
+/*------------------------- THE MACHINE'S OWN VALUES -----------------------*/
+/*--------------------------------------------------------------------------*/
+
+/* What one entry of a dense inner product costs, what one entry of the merge
+ * of two lists of nonzeroes costs, what starting a thread costs, and how much
+ * memory and how many cores the machine has: these are measured on the
+ * machine at the first compilation [see svm_arch.cpp] and are what the rules
+ * below turn into the defaults. Compiling without the header is allowed, and
+ * gives the conservative values of an ordinary machine of 2025. */
+
+#if defined( __has_include )
+ #if __has_include( "SVMBlockArch.h" )
+  #include "SVMBlockArch.h"
+ #endif
+#endif
+
+#ifndef SVMBlock_ARCH_MEMORY
+ #define SVMBlock_ARCH_MEMORY 8589934592.0
+#endif
+
+#ifndef SVMBlock_ARCH_CORES
+ #define SVMBlock_ARCH_CORES 8
+#endif
+
+#ifndef SVMBlock_ARCH_DOT
+ #define SVMBlock_ARCH_DOT 1e-9
+#endif
+
+#ifndef SVMBlock_ARCH_MERGE
+ #define SVMBlock_ARCH_MERGE 4e-9
+#endif
+
+#ifndef SVMBlock_ARCH_DENSITY
+ #define SVMBlock_ARCH_DENSITY 0.1
+#endif
+
+#ifndef SVMBlock_ARCH_THREAD
+ #define SVMBlock_ARCH_THREAD 4e-5
+#endif
+
+/*--------------------------------------------------------------------------*/
 /*----------------------------- CLASS SVMBlock -----------------------------*/
 /*--------------------------------------------------------------------------*/
 /*--------------------------- GENERAL NOTES --------------------------------*/
@@ -260,6 +301,40 @@ class SVMBlock : public Block
   dGammaScale = 0 ,   ///< \f$ \gamma = 1 / ( m \, \mathrm{Var}( X ) ) \f$
   dGammaAuto = -1     ///< \f$ \gamma = 1 / m \f$
   };
+
+/*--------------------------------------------------------------------------*/
+ /// the density below which a sample is read as the list of its nonzeroes
+ /** The density at which the merge of the two lists of nonzeroes stops being
+  * faster than the dense inner product on this machine, which is where the
+  * two were measured to cross [see svm_arch.cpp]. */
+
+ static constexpr double dSparseDensity = SVMBlock_ARCH_DENSITY;
+
+/*--------------------------------------------------------------------------*/
+ /// how much memory the Gram matrix and its rows may take by default
+ /** A quarter of the memory of the machine: the samples, the model and
+  * whatever else is being trained at the same time live in the rest, and a
+  * cache that swaps costs more than the kernel it saves. */
+
+ static constexpr double dKMemory = SVMBlock_ARCH_MEMORY / 4;
+
+/*--------------------------------------------------------------------------*/
+ /// the bytes of memory of the machine, as measured at compilation
+
+ static constexpr double dMemory = SVMBlock_ARCH_MEMORY;
+
+/*--------------------------------------------------------------------------*/
+ /// the seconds that starting a thread and waiting for it takes here
+ /** What a thread costs, which is what says how much work is worth handing
+  * over to one: whoever spreads a loop over the cores compares this with what
+  * the loop does [see get_K()]. */
+
+ static constexpr double dThreadCost = SVMBlock_ARCH_THREAD;
+
+/*--------------------------------------------------------------------------*/
+ /// the seconds that one entry of a dense inner product takes here
+
+ static constexpr double dDotCost = SVMBlock_ARCH_DOT;
 
 /** @} ---------------------------------------------------------------------*/
 /*--------------------- CONSTRUCTOR AND DESTRUCTOR -------------------------*/
@@ -631,6 +706,49 @@ class SVMBlock : public Block
   * depend on the kernel, which for it can only be the linear one: exception
   * is thrown if any other one is set while the primal is generated. */
 
+ /// sets which features the kernel reads
+ /** Sets the features the kernel reads to those in \p which, which must be
+  * sorted and without repetitions, all the others being left out of every
+  * inner product; passing all the features, or an empty \p which with
+  * \p all on, puts the data set back as it was.
+  *
+  * The samples are not touched: a feature that is dropped stays in the data,
+  * since model selection drops one and puts it back, and what changes is the
+  * Gram matrix. With the linear kernel that change is of rank one per
+  * feature, and therefore the gradient of the dual is corrected in linear
+  * time rather than recomputed, which is what SMOSolver does with the
+  * Modification this issues; with any other kernel every entry changes by a
+  * factor of its own and the training starts again.
+  *
+  * This is a device of the model selection and not a datum of the instance:
+  * it is not serialized, and a Block read from a file has all its features
+  * active. */
+
+ void set_active_features( Subset && which , bool all = false ,
+                           ModParam issueMod = eNoBlck ,
+                           ModParam issueAMod = eNoBlck );
+
+/*--------------------------------------------------------------------------*/
+ /// returns the active features, sorted; empty means that all of them are
+
+ c_IndexVec & get_active_features( void ) const { return( v_afeat ); }
+
+/*--------------------------------------------------------------------------*/
+ /// returns how many features the kernel reads
+
+ Index get_NActiveFeatures( void ) const {
+  return( v_afeat.empty() ? f_m : Index( v_afeat.size() ) );
+  }
+
+/*--------------------------------------------------------------------------*/
+ /// returns true if the kernel reads the feature \p j
+
+ bool is_active_feature( Index j ) const {
+  return( v_amask.empty() || v_amask[ j ] );
+  }
+
+/*--------------------------------------------------------------------------*/
+
  void set_kernel( int type , double gamma = dGammaScale , int degree = 3 ,
                   double coef0 = 0 , ModParam issueMod = eNoBlck ,
                   ModParam issueAMod = eNoBlck );
@@ -980,6 +1098,11 @@ class SVMBlock : public Block
  void set_sparse_density( double density );
 
 /*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+ /// the density below which the samples are read sparse
+
+ double get_sparse_density( void ) const { return( f_sparse_density ); }
+
+/*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
  /// decides whether the samples are read sparse, and if so builds the lists
 
  void build_sparse( void ) const;
@@ -999,6 +1122,45 @@ class SVMBlock : public Block
  /// the kernel of two samples, read out of the lists of their nonzeroes
 
  double kernel_sparse( Index i , Index j ) const;
+
+/*- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -*/
+ /** The three aggregates the dense kernels are made of, i.e., the inner
+  * product and the squared Euclidean and the Manhattan distance, each read
+  * on the active features only; with all the features active, which is the
+  * ordinary case, the loop is the plain one over the m of them. */
+
+ double dot( const double * x , const double * z ) const {
+  double d = 0;
+  if( v_afeat.empty() )
+   for( Index j = 0 ; j < f_m ; ++j )
+    d += x[ j ] * z[ j ];
+  else
+   for( auto j : v_afeat )
+    d += x[ j ] * z[ j ];
+  return( d );
+  }
+
+ double dist2( const double * x , const double * z ) const {
+  double d = 0;
+  if( v_afeat.empty() )
+   for( Index j = 0 ; j < f_m ; ++j )
+    d += ( x[ j ] - z[ j ] ) * ( x[ j ] - z[ j ] );
+  else
+   for( auto j : v_afeat )
+    d += ( x[ j ] - z[ j ] ) * ( x[ j ] - z[ j ] );
+  return( d );
+  }
+
+ double dist1( const double * x , const double * z ) const {
+  double d = 0;
+  if( v_afeat.empty() )
+   for( Index j = 0 ; j < f_m ; ++j )
+    d += std::abs( x[ j ] - z[ j ] );
+  else
+   for( auto j : v_afeat )
+    d += std::abs( x[ j ] - z[ j ] );
+  return( d );
+  }
 
 /*--------------------------------------------------------------------------*/
  /// returns the n x n Gram matrix of the kernel, stored row-wise
@@ -1066,6 +1228,11 @@ class SVMBlock : public Block
   * 1 GB. */
 
  void set_K_memory( double bytes );
+
+/*--------------------------------------------------------------------------*/
+ /// how much memory the rows of the Gram matrix may take, in bytes
+
+ double get_K_memory( void ) const { return( f_K_memory ); }
 
 /*--------------------------------------------------------------------------*/
  /// forgets the Gram matrix and the rows of it that are cached
@@ -1206,6 +1373,15 @@ class SVMBlock : public Block
   * or any hyper-parameter entering the map changes. */
 
  virtual void set_dual_data( void ) = 0;
+
+/*--------------------------------------------------------------------------*/
+ /// turns the labels of a file in the format of LIBSVM into targets
+ /** The sparse format of LIBSVM carries whatever labels the data set was
+  * published with (e.g., 0 and 1, or 2 and 4, for a classification problem),
+  * which LIBSVM itself accepts; this turns them into the targets of the
+  * problem, and by default it leaves them as they are. */
+
+ virtual void labels_to_targets( doubleVec & y ) const {}
 
 /*--------------------------------------------------------------------------*/
  /// recomputes the bias out of the current multipliers
@@ -1397,6 +1573,15 @@ class SVMBlock : public Block
 
  doubleVec v_X;              ///< the n x m samples, stored row-wise
 
+ /* Which features the kernel reads: model selection also acts on them, and a
+  * feature that is dropped is not removed from v_X, since it is usually put
+  * back, but left out of every inner product. Both vectors are EMPTY when
+  * every feature is active, which is the common case and the one in which the
+  * kernel costs exactly what it costed before this existed. */
+
+ IndexVec v_afeat;           ///< the active features, sorted; empty = all
+ std::vector< bool > v_amask;  ///< the same, indexed by feature; empty = all
+
  /* The samples read as the list of their nonzeroes, which is how the kernel
   * of a sparse data set is computed: reading a sample dense costs m
   * operations per evaluation whatever the data holds, while merging the two
@@ -1415,7 +1600,7 @@ class SVMBlock : public Block
  mutable char f_sparse = 0;
 
  /// the density below which the samples are read sparse [see kernel()]
- double f_sparse_density = 0.1;
+ double f_sparse_density = dSparseDensity;
  doubleVec v_y;              ///< the n targets
 
  double f_C = 1;             ///< the trade-off parameter C
@@ -1469,7 +1654,7 @@ class SVMBlock : public Block
  const double * K_row( Index i , bool full ) const;
 
  /// how much memory the rows of the Gram matrix may take, in bytes
- double f_K_memory = 1024 * 1024 * 1024.0;
+ double f_K_memory = dKMemory;
  mutable double f_gamma_res = 0;
  ///< the cached value of gamma derived from the data, 0 if not derived yet
 
@@ -1571,7 +1756,8 @@ class SVMBlockMod : public Modification
   eChgEpsilon ,      ///< change the half-width of the insensitivity tube
   eChgTargets ,      ///< change the targets of some samples
   eAddSamples ,      ///< add samples at the end of the data set
-  eRmvSamples        ///< remove samples from the data set
+  eRmvSamples ,      ///< remove samples from the data set
+  eChgFeatures       ///< change which features the kernel reads
   };
 
 /*---------------------- CONSTRUCTOR & DESTRUCTOR --------------------------*/

@@ -236,7 +236,10 @@ class LIBSVMSolver : public Solver
    * LIBSVM, and it defaults to 1e-3 exactly as there. */
   dblLSVMCache ,                ///< size of the kernel cache, in MB
   /**< The size, in MB, of the cache LIBSVM keeps the columns of the Hessian
-   * it has already computed into. Defaults to 100, as in LIBSVM. */
+   * it has already computed into. Defaults to 100, as in LIBSVM; 0 means the
+   * budget the SVMBlock gives its own cache of the Gram matrix [see
+   * SVMBlock::get_K_memory()], so that LIBSVM and a Solver that uses that
+   * cache are compared with the same memory. */
   dblLastAlgParLSVM  ///< 1st allowed new double parameter for derived classes
   };
 

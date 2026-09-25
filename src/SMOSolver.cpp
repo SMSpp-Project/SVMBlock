@@ -291,6 +291,12 @@ bool SMOSolver::guts_of_poM( const Modification * mod )
    case( SVMBlockMod::eChgKernel ):
    case( SVMBlockMod::eChgRegBias ):
     return( false );  // the Hessian of the dual changes as a whole
+   case( SVMBlockMod::eChgFeatures ):
+    /* With the linear kernel switching a feature off is a rank-one change of
+     * the Hessian, which the gradient follows in linear time [see
+     * resync_features()]; with any other kernel the Gram matrix has to be
+     * computed again anyway, whence there is nothing to save. */
+    return( f_SVM->get_kernel_type() == SVMBlock::kLinear );
    case( SVMBlockMod::eAddSamples ):
    case( SVMBlockMod::eRmvSamples ):
     /* The dual index space changes size, but the multipliers of the samples
@@ -366,6 +372,7 @@ void SMOSolver::reload( void )
 
  v_s = f_SVM->get_dual_signs();
  v_di_c = f_SVM->get_dual_samples();
+ v_afeat_c = f_SVM->get_active_features();
 
  /* The sample of each dual index is read out of the *copy*, and not out of
   * the SVMBlock, because the shrinking reorders the dual indices [see
@@ -507,6 +514,57 @@ bool SMOSolver::resample( void )
 
 /*--------------------------------------------------------------------------*/
 
+bool SMOSolver::resync_features( void )
+{
+ auto & af = f_SVM->get_active_features();
+
+ if( af == v_afeat_c )   // the kernel reads what it read
+  return( true );
+
+ if( f_SVM->get_kernel_type() != SVMBlock::kLinear )
+  return( false );
+
+ const Index m = f_SVM->get_NFeatures();
+
+ /* Which features have changed state, and with which sign each of them enters
+  * the correction: with the linear kernel the feature j contributes the term
+  * V_j V_j^T / rw to the Hessian of the dual, V_{kj} = s_k x_{i(k)j}, whence
+  * switching it off subtracts that term and switching it back on adds it. */
+
+ std::vector< char > was( m , 1 );
+ if( ! v_afeat_c.empty() ) {
+  was.assign( m , 0 );
+  for( auto j : v_afeat_c )
+   was[ j ] = 1;
+  }
+
+ doubleVec Vj( f_N );
+
+ for( Index j = 0 ; j < m ; ++j ) {
+  const bool is = f_SVM->is_active_feature( j );
+  if( bool( was[ j ] ) == is )
+   continue;
+
+  // the column of the feature and what the multipliers make of it
+  double t = 0;
+  for( Index k = 0 ; k < f_N ; ++k ) {
+   t += v_alpha[ k ] * ( Vj[ k ] = v_s[ k ]
+                                  * f_SVM->get_x( f_di[ k ] )[ j ] );
+   }
+
+  const double c = ( is ? t : - t ) / f_rw;
+  for( Index k = 0 ; k < f_N ; ++k )
+   v_G[ k ] += c * Vj[ k ];
+  }
+
+ v_afeat_c = af;
+
+ return( true );
+
+ }  // end( SMOSolver::resync_features )
+
+/*--------------------------------------------------------------------------*/
+
 bool SMOSolver::resync( void )
 {
  if( ( v_alpha.size() != f_N ) || ( v_G.size() != f_N ) ||
@@ -534,6 +592,17 @@ bool SMOSolver::resync( void )
 
  v_di_c = f_SVM->get_dual_samples();
  f_di = v_di_c.data();
+
+ /* The features the kernel reads are taken care of first, the correction
+  * being written in terms of the Gram matrix as it was; a resample() has
+  * rather recomputed the gradient already, and with it the change. */
+
+ if( v_smap.empty() ) {
+  if( ! resync_features() )
+   return( false );
+  }
+ else
+  v_afeat_c = f_SVM->get_active_features();
 
  /* The gradient G = Q alpha + q is affine in the multipliers, in the linear
   * term and in the diagonal alike, whence each of the three changes below is

@@ -271,7 +271,7 @@ void LIBSVMSolver::build_problem( void )
   start[ i ] = v_node.size();
   auto xi = f_SVM->get_x( i );
   for( Index j = 0 ; j < m ; ++j )
-   if( xi[ j ] != 0 )
+   if( ( xi[ j ] != 0 ) && f_SVM->is_active_feature( j ) )
     v_node.push_back( svm_node{ int( j ) + 1 , xi[ j ] } );
   v_node.push_back( svm_node{ -1 , 0 } );
   }
@@ -326,7 +326,8 @@ void LIBSVMSolver::build_parameters( void )
 
  f_par.C = f_SVM->get_C();
  f_par.eps = f_tol;
- f_par.cache_size = f_cache;
+ f_par.cache_size = ( f_cache > 0 ) ? f_cache
+                                    : f_SVM->get_K_memory() / ( 1 << 20 );
  f_par.shrinking = f_shrink;
  f_par.probability = 0;
 
