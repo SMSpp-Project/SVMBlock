@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `SVMBlockSolution::is_dual_feasible()` checks that the multipliers it
+  holds are a feasible solution of the dual of the training problem: in
+  [ 0 , C ], or nonnegative with the squared loss, and orthogonal to the
+  signs of the dual index space unless the bias is regularised [see
+  `Solution::is_dual_feasible()`]
+
 - `SVMBlock::set_active_features()`, which features the kernel reads: the
   samples stay where they are and an inactive feature counts as a column of
   zeroes, in the Gram matrix, in the coefficients of the model in the primal
