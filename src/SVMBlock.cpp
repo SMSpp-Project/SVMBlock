@@ -3395,49 +3395,6 @@ void SVMBlockSolution::write( Block * block )
 
 /*--------------------------------------------------------------------------*/
 
-bool SVMBlockSolution::is_dual_feasible( Block * block , Configuration * fsbc )
-{
- auto svmb = dynamic_cast< SVMBlock * >( block );
- if( ! svmb )
-  throw( std::invalid_argument( "SVMBlockSolution::is_dual_feasible: block "
-				"is not a SVMBlock" ) );
-
- if( v_alpha.empty() )
-  return( false );
-
- auto & s = svmb->get_dual_signs();
- if( v_alpha.size() != s.size() )
-  return( false );
-
- double eps = 1e-6;
- if( auto c = dynamic_cast< SimpleConfiguration< double > * >( fsbc ) )
-  eps = c->f_value;
-
- // the box: [ 0 , C ], or [ 0 , +inf ) with the squared loss
- const double C = svmb->get_C();
- const bool box = ! svmb->get_squared_loss();
- const double tol = eps * std::max( 1.0 , C );
- for( auto a : v_alpha )
-  if( ( a < - tol ) || ( box && ( a > C + tol ) ) )
-   return( false );
-
- // the equality constraint that the regularised bias takes away
- if( ! svmb->get_reg_bias() ) {
-  double sum = 0 , scale = 1;
-  for( SVMBlock::Index k = 0 ; k < v_alpha.size() ; ++k ) {
-   sum += s[ k ] * v_alpha[ k ];
-   scale = std::max( scale , std::abs( v_alpha[ k ] ) );
-   }
-  if( std::abs( sum ) > eps * scale )
-   return( false );
-  }
-
- return( true );
-
- }  // end( SVMBlockSolution::is_dual_feasible )
-
-/*--------------------------------------------------------------------------*/
-
 SVMBlockSolution * SVMBlockSolution::scale( double factor ) const
 {
  auto sol = SVMBlockSolution::clone( true );

@@ -2001,19 +2001,6 @@ class SVMBlockSolution : public Solution
  void read( const Block * block ) override final;
 
 /*--------------------------------------------------------------------------*/
- /// tells whether the dual values held here are feasible for the Block
- /** The multipliers held here are the variables of the dual of the training
-  * problem, which asks them to be in [ 0 , C ] (in [ 0 , +inf ) with the
-  * squared loss) and, unless the bias is regularised, to be orthogonal to
-  * the signs of the dual index space [see SVMBlock::get_dual_signs()], up to
-  * the double of fsbc if it is a SimpleConfiguration< double >, 1e-6
-  * otherwise, relative to C and to the largest term of the sum; false if no
-  * multipliers are held here [see Solution::is_dual_feasible()]. */
-
- bool is_dual_feasible( Block * block ,
-			Configuration * fsbc = nullptr ) override;
-
-/*--------------------------------------------------------------------------*/
  /// write the model into the given SVMBlock
  /** Writes the model into the given SVMBlock, which must have the same data
   * set as the one it was read from, and into its abstract representation if
