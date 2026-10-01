@@ -115,7 +115,7 @@ if (NOT CMAKE_CROSSCOMPILING)
     set(archHeader ${CMAKE_CURRENT_SOURCE_DIR}/include/SVMBlockArch.h)
 
     add_executable(svm_arch tools/svm_arch.cpp)
-    target_compile_features(svm_arch PRIVATE cxx_std_17)
+    target_compile_features(svm_arch PRIVATE cxx_std_20)
     find_package(Threads REQUIRED)
     target_link_libraries(svm_arch PRIVATE Threads::Threads)
 
@@ -135,7 +135,7 @@ endif ()
 # With the BUILD_SHARED_LIBS variable we can specify if the library will
 # be STATIC or SHARED, so no reason to do it now.
 add_library(${modName})
-target_compile_features(${modName} PUBLIC cxx_std_17)
+target_compile_features(${modName} PUBLIC cxx_std_20)
 
 if (NOT CMAKE_CROSSCOMPILING)
     add_dependencies(${modName} generate_svm_arch)
