@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-09
+
 ### Added
 
 - `SVMBlock::set_active_features()`, which features the kernel reads: the
@@ -277,6 +279,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - the package configuration file finds the libraries the module links, so that
   a project using the installed module needs nothing more than find_package()
 
-[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.2.0...develop
+[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.3.0...develop
+[0.3.0]: https://gitlab.com/smspp/svmblock/-/compare/0.2.0...0.3.0
 [0.2.0]: https://gitlab.com/smspp/svmblock/-/compare/0.1.0...0.2.0
 [0.1.0]: https://gitlab.com/smspp/svmblock/-/tags/0.1.0
