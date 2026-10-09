@@ -24,6 +24,12 @@
 
 #include <algorithm>
 
+#include <cstdlib>
+
+#include <cstring>
+
+#include <iostream>
+
 #include <string>
 
 /*--------------------------------------------------------------------------*/
@@ -46,7 +52,28 @@ SMSpp_insert_in_factory_cpp_1( LIBSVMSolver );
 
 /// what LIBSVM prints its log with when it has to print nothing
 
-static void silence( const char * ) {}
+/* LIBSVM reports how many iterations it took by printing it, there being no
+ * accessor for it: the string it prints is read here, so that a comparison
+ * can say whether a difference is in the iterations or in what each of them
+ * costs. The print function is a callback of the library, which carries
+ * nothing of the caller, and it is called by svm_train() in the thread that
+ * calls it; the count is therefore thread-local, so that Solver of different
+ * SVMBlock run in parallel threads each read their own. */
+
+static thread_local long f_LIBSVM_iterations = 0;
+static thread_local bool f_LIBSVM_verbose = false;
+
+static void read_iterations( const char * s )
+{
+ if( ! s )
+  return;
+
+ if( const char * p = std::strstr( s , "#iter = " ) )
+  f_LIBSVM_iterations += std::atol( p + 8 );
+
+ if( f_LIBSVM_verbose )
+  std::cout << s << std::flush;
+ }
 
 /*--------------------------------------------------------------------------*/
 /*--------------------- DERIVED METHODS OF BASE CLASS ----------------------*/
@@ -116,11 +143,14 @@ int LIBSVMSolver::compute( bool changedvars )
                                 "problem: " + msg ) );
   }
 
- svm_set_print_string_function( f_log_verb ? nullptr : & silence );
+ f_LIBSVM_verbose = bool( f_log_verb );
+ svm_set_print_string_function( & read_iterations );
+ f_LIBSVM_iterations = 0;
 
  f_solved = false;
  free_model();
  f_model = svm_train( & f_prob , & f_par );
+ f_iterations = f_LIBSVM_iterations;
 
  if( ! f_model ) {
   unlock();
@@ -171,22 +201,22 @@ Solution * LIBSVMSolver::get_Solution( Configuration * solc )
  if( ! f_solved )
   return( nullptr );
 
- // which Solution the Configuration asks for is the SVMBlock's business,
- // and asking it for an empty one is how it is found out
+ /* A physical Solver produces the Solution its Block keeps the model in,
+  * whatever the Configuration says: the Block is asked for that one [see
+  * SVMBlock::get_Solution()] rather than the :Solution being constructed by
+  * name here, so that a derived :Block is given the chance of answering
+  * with its own. */
 
- auto sol = f_SVM->get_Solution( solc , true );
+ SimpleConfiguration< int > physical( 3 );
+ auto sol = dynamic_cast< SVMBlockSolution * >(
+                                  f_SVM->get_Solution( & physical , true ) );
+ if( ! sol )
+  throw( std::logic_error( "LIBSVMSolver::get_Solution: the SVMBlock did not "
+                           "return a SVMBlockSolution" ) );
 
- if( auto msol = dynamic_cast< SVMBlockSolution * >( sol ) ) {
-  msol->set_dual_model( doubleVec( v_alpha ) , f_b );
-  return( msol );
-  }
+ sol->set_dual_model( doubleVec( v_alpha ) , f_b );
 
- delete sol;
-
- // anything else saves the abstract representation, which this Solver does
- // not write into: the base class does the only thing that can be done
-
- return( Solver::get_Solution( solc ) );
+ return( sol );
 
  }  // end( LIBSVMSolver::get_Solution )
 
@@ -241,7 +271,7 @@ void LIBSVMSolver::build_problem( void )
   start[ i ] = v_node.size();
   auto xi = f_SVM->get_x( i );
   for( Index j = 0 ; j < m ; ++j )
-   if( xi[ j ] != 0 )
+   if( ( xi[ j ] != 0 ) && f_SVM->is_active_feature( j ) )
     v_node.push_back( svm_node{ int( j ) + 1 , xi[ j ] } );
   v_node.push_back( svm_node{ -1 , 0 } );
   }
@@ -296,7 +326,8 @@ void LIBSVMSolver::build_parameters( void )
 
  f_par.C = f_SVM->get_C();
  f_par.eps = f_tol;
- f_par.cache_size = f_cache;
+ f_par.cache_size = ( f_cache > 0 ) ? f_cache
+                                    : f_SVM->get_K_memory() / ( 1 << 20 );
  f_par.shrinking = f_shrink;
  f_par.probability = 0;
 

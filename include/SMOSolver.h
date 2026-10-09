@@ -223,22 +223,28 @@ class SMOSolver : public Solver
  /** Returns the solution of the last call to compute() as a Solution object,
   * or nullptr if there is none.
   *
-  * If what the Configuration asks for is a SVMBlockSolution, i.e., the
-  * trained model [see SVMBlockSolution], then it is built here out of the
-  * multipliers this Solver holds, without writing anything into the SVMBlock:
-  * no Variable is therefore required to exist, and the SVMBlock is not
-  * lock()-ed, so that any number of Solver attached to it can produce their
-  * own Solution at the same time.
+  * What comes back is always the SVMBlockSolution, i.e., the trained model
+  * [see SVMBlockSolution], built here out of the multipliers this Solver
+  * holds, without writing anything into the SVMBlock: no Variable is
+  * therefore required to exist, and the SVMBlock is not lock()-ed, so that
+  * any number of Solver attached to it can produce their own Solution at the
+  * same time. Whoever wants the model in the abstract representation writes
+  * the Solution into the SVMBlock [see SVMBlockSolution::write()], which is
+  * the one operation that needs the Variable.
   *
-  * Any other Solution saves (part of) the abstract representation instead,
-  * which only the SVMBlock can fill; the method of the base class is used
-  * then, which writes the solution into the Variable and asks the SVMBlock
-  * for it. Which one is asked for is not decided here: the SVMBlock is asked
-  * for an empty Solution, exactly as it would be in the end, and what it
-  * returns is what tells the two cases apart. */
+  * The Configuration is therefore not looked at: what it selects is which
+  * part of the solution information is wanted, and this Solver has one part
+  * to give. */
 
  [[nodiscard]] Solution * get_Solution( Configuration * solc = nullptr )
   override;
+/*--------------------------------------------------------------------------*/
+ /// the Solution is built from the data of the Solver, not from the Variable
+
+ [[nodiscard]] bool is_get_Solution_physical( void ) const override {
+  return( true );
+  }
+
 
 /*--------------------------------------------------------------------------*/
  /// returns a valid lower bound on the optimal objective function value
@@ -462,6 +468,18 @@ class SMOSolver : public Solver
  bool resample( void );
 
 /*--------------------------------------------------------------------------*/
+ /// realigns the gradient to a change of the set of the active features
+ /** Realigns the gradient of the dual to a change of the set of the features
+  * the kernel reads, which with the linear kernel is a rank-one change of the
+  * Hessian for each feature that has been switched off or back on, and is
+  * therefore followed in $ O( N | J | ) $ operations, $ J $ being the
+  * features whose state has changed. Returns false with any other kernel,
+  * whose Gram matrix changes in a way that only computing it again
+  * describes. */
+
+ bool resync_features( void );
+
+/*--------------------------------------------------------------------------*/
  /// reads the data of the dual out of the SVMBlock, starting from the origin
 
  void reload( void );
@@ -527,8 +545,10 @@ class SMOSolver : public Solver
  /// puts back into the active set everything that had been taken out
  /** Restores the whole index space, recomputing the gradient of what had
   * been left out, which the steps taken in the meantime have made stale:
-  * G = Q alpha + q costs one row of the Gram matrix per *nonzero* multiplier
-  * rather than one per index restored. */
+  * G = Q alpha + q costs one row of the Gram matrix per multiplier that is
+  * nonzero and not at its upper bound, rather than one per index restored,
+  * plus one per multiplier that has reached the upper bound or left it
+  * since the previous restore [see v_Gb]. */
 
  void unshrink( void );
 
@@ -697,6 +717,22 @@ class SMOSolver : public Solver
 
  doubleVec v_QD;               ///< the diagonal of the Hessian of the dual
 
+ /* What the multipliers that sit at their upper bound contribute to the
+  * gradient: the restore of the active set reads a row of the Gram matrix
+  * per nonzero multiplier [see unshrink()], and on a data set where most of
+  * them are at the bound this is almost all of what a solve costs, while
+  * their contribution changes only when one of them arrives at the bound or
+  * leaves it. It is therefore kept from one restore to the next, brought up
+  * to date with one row per multiplier whose side has changed, which are
+  * far fewer; v_Gb_at says which ones it counts, so that the difference is
+  * read off it rather than recorded as it happens. Both are indexed by dual
+  * index in the current order, hence exchanged by swap_index(), and both
+  * are empty when the multipliers have no upper bound and until the first
+  * restore asks for them. */
+
+ doubleVec v_Gb;               ///< the contribution of the bounded ones
+ std::vector< char > v_Gb_at;  ///< which multipliers v_Gb counts
+
  /* The active set is a *prefix* of the current order of the dual indices:
   * shrinking an index is exchanging it with the last active one, which keeps
   * every scan of the active set sequential, as it would be without
@@ -733,6 +769,13 @@ class SMOSolver : public Solver
  doubleVec v_s;                ///< the N signs
  doubleVec v_q;                ///< the N linear coefficients
  IndexVec v_di_c;              ///< the N sample indices, copied
+
+ /* The active features of the SVMBlock, copied for the same reason: which
+  * ones have been switched off, or back on, is read as the difference
+  * between this and the current ones [see resync_features()]. Empty when all
+  * the features are active, exactly as in the SVMBlock. */
+
+ IndexVec v_afeat_c;           ///< the active features, copied
 
  /* Which sample of the data set this Solver is aligned to each sample of the
   * current one was, Inf< Index >() for a sample that has been added since;

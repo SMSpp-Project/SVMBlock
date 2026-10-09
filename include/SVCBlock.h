@@ -108,6 +108,14 @@ class SVCBlock : public SVMBlock
 
  void set_dual_data( void ) override;
 
+/*--------------------------------------------------------------------------*/
+ /// turns the two labels of a file in the format of LIBSVM into -1 and +1
+ /** The smaller of the two labels becomes -1 and the larger +1 (e.g., 0 and 1,
+  * or 2 and 4, become -1 and +1), and more than two labels are an error,
+  * this being a binary classification problem. */
+
+ void labels_to_targets( doubleVec & y ) const override;
+
 /*----------------------- PRIVATE PART OF THE CLASS ------------------------*/
 
  private:

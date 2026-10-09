@@ -7,11 +7,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-09
+
 ### Added
+
+- `SVMBlock::set_active_features()`, which features the kernel reads: the
+  samples stay where they are and an inactive feature counts as a column of
+  zeroes, in the Gram matrix, in the coefficients of the model in the primal
+  and in the weights the dual gives back, so that a selection of the features
+  is a change of the training problem and not a copy of the data set. With the
+  linear kernel switching one off is a rank-one change of the Hessian of the
+  dual, which `SMOSolver` follows by correcting the gradient in `O( N )`
+  operations per feature rather than starting over
+
+- `LIBSVMSolver::get_elapsed_iterations()`, how many iterations the last call
+  to `compute()` took: the library has no accessor for the count, which it
+  only prints, hence what is returned is read out of what it prints, which is
+  what makes a comparison able to say whether a difference is in the
+  iterations or in what each of them costs
+
+- `SVMBlock::set_sparse_density()`, the density below which a sample is read
+  as the list of its nonzeroes rather than as m consecutive doubles: zero
+  reads them always dense and one always sparse, the default being the tenth
+  at which the merge of two lists stops paying. The value of the kernel is
+  the same either way, the entries the merge skips being zeroes, so that this
+  changes the time and not what any algorithm does
 
 ### Changed
 
+- the data archive is downloaded by version: `DATA_VERSION` in CMakeLists.txt
+  names the version of the Package Registry to read, and the archive and the
+  marker of its extraction carry it in their name, so that a tree holding
+  an older extraction (the cache of the CI, or a clone extracted before)
+  downloads and extracts again instead of running on the old data;
+  data/upload-libsvm publishes the archive under that version
+
+- a file in the sparse format of LIBSVM may carry any two labels (e.g., 0 and
+  1, or 2 and 4), as LIBSVM itself accepts: `SVCBlock` turns the smaller into
+  -1 and the larger into +1, and rejects more than two
+
+- `dblLSVMCache 0` gives LIBSVM the budget the SVMBlock gives its own cache of
+  the Gram matrix, so that LIBSVM and `SMOSolver` can be compared with the
+  same memory; the default stays at the 100 MB of LIBSVM
+
+- the tester reads the groups of Variable and of Constraint of the Block, the
+  vectors of `boost::any` it used to read not being there any more
+
+- the makefile asks for `-O3 -DNDEBUG` and nothing else, the macro of the
+  patch for `boost::any` on macOS having no reason to be there since there is
+  no `boost::any` left in the core
+
+- whoever links the module keeps it: the classes of a module register
+  themselves in the factory from a static initialiser, and a linker that
+  drops what looks unused takes the registration away with it, so the target
+  now tells whoever links it to keep the symbol that forces the module in,
+  and on ELF, where naming the symbol is not enough, the library as a whole
+
+- a budget that would pay for the whole Gram matrix is no longer a reason to
+  compute it: what decides is how many of its rows the algorithm reads, which
+  is a fraction of them whenever the support set is one, so the rows are
+  computed as they are read and a budget above the matrix simply means that
+  the cache never evicts anything. On `rcv1` (20242 samples, whose matrix
+  is 3.3 GB) under a budget of 4 GB this is 45.2 seconds against 90.5, the
+  optimal value being the same; the whole matrix is still built for whoever
+  asks for the whole of it, such as the abstract representation of the dual
+
+- the restore of the active set recomputes the gradient in whichever of the
+  two ways costs less at that moment: a row of each multiplier that is
+  neither zero nor at a bound, read at full width, or a row of each index
+  being restored, read at the width of the active set alone. The count of the
+  kernel evaluations the two ask for decides, the first being one per free
+  multiplier and index of the data set and the second one per index restored
+  and index of the active set
+
+- the changes of the abstract representation that one setter causes travel as
+  a single group: a hyper-parameter can touch the bounds, the sides and the
+  Objective at once, and each of the three used to issue its own, so that
+  whoever receives them now receives the whole change in one pass, with the
+  group of each piece nested into it
+
+- the three Solver of the module answer `get_Solution()` with the
+  `SVMBlockSolution`, i.e., the trained model, whatever the Configuration
+  asks for, and say so in `is_get_Solution_physical()`: a Solver that has the
+  model and no abstract representation to fill has one part of the solution
+  information to give, and whoever wants it in the Variable writes the
+  Solution into the SVMBlock
+
+- the restore of the active set, which the shrinking takes every so often so
+  that a collapsed one cannot grind, costs what it should: the pair is
+  selected out of the whole index space again for one pass rather than for a
+  whole period of them, each of which would read a row of the Gram matrix as
+  wide as the data set, and the gradient it recomputes no longer reads one
+  such row per nonzero multiplier. Those that sit at their upper bound
+  contribute the same thing until they leave it, so their part is kept from
+  one restore to the next and brought up to date with one row per multiplier
+  that has changed side, as `LIBSVM` does. On `w8a` under a budget of 200 MB
+  for the rows this is 2.0 billion evaluations of the kernel against 252
+  million, i.e., 18 seconds against 101
+
 ### Fixed
+
+- on macOS a program linking the module lost the classes the module
+  registers in the factories when the linker dropped the library, as it
+  does under `-dead_strip_dylibs`, which conda sets: the target now asks the
+  linker for the symbol that forces the module in (`-u`), which ld64,
+  unlike the ELF linker, counts as a use of the library
+
+- the step that fetches the data archive of this module says what went wrong
+  when it goes wrong: the download is checked, an archive that did not arrive
+  is removed instead of being left on disk for the build to take for the real
+  one, and the message names the URL. A server that answers with an error page
+  used to leave a file of a few bytes there, which made the next build fail
+  while extracting it, with the message of `tar` and no mention of the
+  download
+
+- when no multiplier can absorb the movement of the index being learnt or
+  unlearnt, `SMOSolver` moves the bias in the direction of that movement,
+  i.e., raising the margin of the index when its multiplier is to grow and
+  lowering it when the multiplier is to be driven to zero, and stops early
+  only when learning; when unlearning, the direction was that of learning and
+  the walk could stop as soon as the margin of the index was met, with the
+  multiplier still positive
+
+- the lists of the nonzeroes are built before the threads that fill the Gram
+  matrix are started, and not by whichever of them asks for a kernel first:
+  they all ask at once, and they were all building them, which corrupts the
+  heap. The value of gamma derived from the data was already resolved there
+  for the same reason
 
 ## [0.2.0] - 2026-09-13
 
@@ -157,5 +279,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - the package configuration file finds the libraries the module links, so that
   a project using the installed module needs nothing more than find_package()
 
-[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.1.0...develop
+[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.3.0...develop
+[0.3.0]: https://gitlab.com/smspp/svmblock/-/compare/0.2.0...0.3.0
+[0.2.0]: https://gitlab.com/smspp/svmblock/-/compare/0.1.0...0.2.0
 [0.1.0]: https://gitlab.com/smspp/svmblock/-/tags/0.1.0

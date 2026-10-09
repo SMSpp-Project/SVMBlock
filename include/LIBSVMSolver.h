@@ -174,6 +174,16 @@ class LIBSVMSolver : public Solver
  bool has_var_solution( void ) override { return( f_solved ); }
 
 /*--------------------------------------------------------------------------*/
+ /// the iterations of the last call to compute()
+ /** How many iterations the last call to compute() took, as LIBSVM reports
+  * them: the library has no accessor for the count, which it only prints,
+  * hence what is returned here is read out of what it prints. */
+
+ [[nodiscard]] long get_elapsed_iterations( void ) const override {
+  return( f_iterations );
+  }
+
+/*--------------------------------------------------------------------------*/
  /// writes the multipliers and the bias into the SVMBlock
  /** Writes the model found by the last call to compute() into the SVMBlock,
   * both into its "physical" solution [see SVMBlock::set_dual_solution()] and,
@@ -185,15 +195,21 @@ class LIBSVMSolver : public Solver
  /// returns the trained model as a Solution, without going through the Block
  /** Returns the model found by the last call to compute() as a Solution
   * object, or nullptr if there is none. It works exactly as
-  * SMOSolver::get_Solution(): if what the Configuration asks for is the
-  * model, i.e., a SVMBlockSolution, then it is filled here out of the data
-  * of this Solver, without writing into the SVMBlock and hence without
-  * requiring any Variable to exist; anything else saves (part of) the
-  * abstract representation, which only the SVMBlock can fill, and is
-  * therefore left to the method of the base class. */
+  * SMOSolver::get_Solution(): what comes back is always the model, i.e., a
+  * SVMBlockSolution, filled here out of the data of this Solver, without
+  * writing into the SVMBlock and hence without requiring any Variable to
+  * exist; whoever wants the model in the abstract representation writes the
+  * Solution into the SVMBlock. */
 
  [[nodiscard]] Solution * get_Solution( Configuration * solc = nullptr )
   override;
+/*--------------------------------------------------------------------------*/
+ /// the Solution is built from the data of the Solver, not from the Variable
+
+ [[nodiscard]] bool is_get_Solution_physical( void ) const override {
+  return( true );
+  }
+
 
 /*--------------------------------------------------------------------------*/
  /// returns a valid lower bound on the optimal objective function value
@@ -220,7 +236,10 @@ class LIBSVMSolver : public Solver
    * LIBSVM, and it defaults to 1e-3 exactly as there. */
   dblLSVMCache ,                ///< size of the kernel cache, in MB
   /**< The size, in MB, of the cache LIBSVM keeps the columns of the Hessian
-   * it has already computed into. Defaults to 100, as in LIBSVM. */
+   * it has already computed into. Defaults to 100, as in LIBSVM; 0 means the
+   * budget the SVMBlock gives its own cache of the Gram matrix [see
+   * SVMBlock::get_K_memory()], so that LIBSVM and a Solver that uses that
+   * cache are compared with the same memory. */
   dblLastAlgParLSVM  ///< 1st allowed new double parameter for derived classes
   };
 
@@ -357,6 +376,7 @@ class LIBSVMSolver : public Solver
 
  double f_tol = 1e-3;          ///< tolerance on the optimality conditions
  double f_cache = 100;         ///< size of the kernel cache, in MB
+ long f_iterations = 0;        ///< iterations of the last call to compute()
  int f_shrink = 1;             ///< nonzero to use the shrinking heuristic
  int f_log_verb = 0;           ///< nonzero for LIBSVM to print its log
 

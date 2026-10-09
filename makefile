@@ -41,49 +41,60 @@ SVMBkH   = $(SVMBkSDR)/include/SVMBlock.h \
 	$(SVMBkSDR)/include/SVRBlock.h \
 	$(SVMBkSDR)/include/SMOSolver.h \
 	$(SVMBkSDR)/include/LIBSVMSolver.h \
-	$(SVMBkSDR)/include/LIBLINEARSolver.h
+	$(SVMBkSDR)/include/LIBLINEARSolver.h \
+	$(SVMBkSDR)/include/SVMBlockArch.h
 
 # clean - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 clean::
-	rm -f $(SVMBkOBJ) $(SVMBkSDR)/*~
+	rm -f $(SVMBkOBJ) $(SVMBkSDR)/*~ $(SVMBkSDR)/tools/svm_arch \
+	$(SVMBkSDR)/include/SVMBlockArch.h
+
+# the properties of the machine, measured once at the first compilation and
+# written into a header that is not part of the sources - - - - - - - - - - -
+
+$(SVMBkSDR)/include/SVMBlockArch.h: $(SVMBkSDR)/tools/svm_arch.cpp
+	$(CC) $(SVMBkSDR)/tools/svm_arch.cpp -o $(SVMBkSDR)/tools/svm_arch \
+	$(SW) -pthread
+	$(SVMBkSDR)/tools/svm_arch $(SVMBkSDR)/include
 
 # dependencies: every .o from its .cpp + every recursively included .h- - - -
 
 $(SVMBkSDR)/obj/SVMBlock.o: $(SVMBkSDR)/src/SVMBlock.cpp \
-	$(SVMBkSDR)/include/SVMBlock.h $(SMS++H) $(SMS++OBJ)
+	$(SVMBkSDR)/include/SVMBlock.h $(SVMBkSDR)/include/SVMBlockArch.h \
+	$(SMS++H) $(SMS++OBJ)
 	$(CC) -c $(SVMBkSDR)/src/SVMBlock.cpp -o $@ \
 	$(SVMBkINC) $(SMS++INC) $(SW)
 
 $(SVMBkSDR)/obj/SVCBlock.o: $(SVMBkSDR)/src/SVCBlock.cpp \
 	$(SVMBkSDR)/include/SVCBlock.h $(SVMBkSDR)/include/SVMBlock.h \
-	$(SMS++H) $(SMS++OBJ)
+	$(SVMBkSDR)/include/SVMBlockArch.h $(SMS++H) $(SMS++OBJ)
 	$(CC) -c $(SVMBkSDR)/src/SVCBlock.cpp -o $@ \
 	$(SVMBkINC) $(SMS++INC) $(SW)
 
 $(SVMBkSDR)/obj/SVRBlock.o: $(SVMBkSDR)/src/SVRBlock.cpp \
 	$(SVMBkSDR)/include/SVRBlock.h $(SVMBkSDR)/include/SVMBlock.h \
-	$(SMS++H) $(SMS++OBJ)
+	$(SVMBkSDR)/include/SVMBlockArch.h $(SMS++H) $(SMS++OBJ)
 	$(CC) -c $(SVMBkSDR)/src/SVRBlock.cpp -o $@ \
 	$(SVMBkINC) $(SMS++INC) $(SW)
 
 $(SVMBkSDR)/obj/SMOSolver.o: $(SVMBkSDR)/src/SMOSolver.cpp \
 	$(SVMBkSDR)/include/SMOSolver.h $(SVMBkSDR)/include/SVMBlock.h \
-	$(SMS++H) $(SMS++OBJ)
+	$(SVMBkSDR)/include/SVMBlockArch.h $(SMS++H) $(SMS++OBJ)
 	$(CC) -c $(SVMBkSDR)/src/SMOSolver.cpp -o $@ \
 	$(SVMBkINC) $(SMS++INC) $(SW)
 
 $(SVMBkSDR)/obj/LIBSVMSolver.o: $(SVMBkSDR)/src/LIBSVMSolver.cpp \
 	$(SVMBkSDR)/include/LIBSVMSolver.h $(SVMBkSDR)/include/SVCBlock.h \
 	$(SVMBkSDR)/include/SVRBlock.h $(SVMBkSDR)/include/SVMBlock.h \
-	$(SMS++H) $(SMS++OBJ)
+	$(SVMBkSDR)/include/SVMBlockArch.h $(SMS++H) $(SMS++OBJ)
 	$(CC) -c $(SVMBkSDR)/src/LIBSVMSolver.cpp -o $@ \
 	$(SVMBkINC) $(libLIBSVMINC) $(SMS++INC) $(SW)
 
 $(SVMBkSDR)/obj/LIBLINEARSolver.o: $(SVMBkSDR)/src/LIBLINEARSolver.cpp \
 	$(SVMBkSDR)/include/LIBLINEARSolver.h $(SVMBkSDR)/include/SVCBlock.h \
 	$(SVMBkSDR)/include/SVRBlock.h $(SVMBkSDR)/include/SVMBlock.h \
-	$(SMS++H) $(SMS++OBJ)
+	$(SVMBkSDR)/include/SVMBlockArch.h $(SMS++H) $(SMS++OBJ)
 	$(CC) -c $(SVMBkSDR)/src/LIBLINEARSolver.cpp -o $@ \
 	$(SVMBkINC) $(libLIBLINEARINC) $(SMS++INC) $(SW)
 

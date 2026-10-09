@@ -84,11 +84,6 @@ SMSpp_define_force_load( SVMBlock );
 /// the relative tolerance within which a multiplier is at one of its bounds
 static constexpr double dBndEps = 1e-8;
 
-/*--------------------------------------------------------------------------*/
-/// the size of the data set above which the Gram matrix is computed in
-/// parallel, below which the threads would cost more than they save
-
-static constexpr SVMBlock::Index dParallelK = 256;
 
 /*--------------------------------------------------------------------------*/
 // < lambda , x >, with an empty lambda standing for the zero vector
@@ -223,6 +218,8 @@ void SVMBlock::load_sparse( std::istream & input )
 
  if( y.empty() )
   throw( std::invalid_argument( _prfx + "no sample in the input" ) );
+
+ labels_to_targets( y );
 
  const Index n = y.size();
 
@@ -464,6 +461,70 @@ void SVMBlock::set_C( double C , ModParam issueMod , ModParam issueAMod )
                            Observer::par2chnl( issueMod ) );
 
  }  // end( SVMBlock::set_C )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::set_active_features( Subset && which , bool all ,
+                                   ModParam issueMod , ModParam issueAMod )
+{
+ static const std::string _prfx = "SVMBlock::set_active_features: ";
+
+ if( all )
+  which.clear();
+ else {
+  if( which.empty() )
+   throw( std::invalid_argument( _prfx + "no feature left to read" ) );
+
+  for( Index t = 0 ; t < which.size() ; ++t ) {
+   if( which[ t ] >= f_m )
+    throw( std::invalid_argument( _prfx + "feature "
+                                  + std::to_string( which[ t ] )
+                                  + " does not exist" ) );
+   if( t && ( which[ t ] <= which[ t - 1 ] ) )
+    throw( std::invalid_argument( _prfx + "the features must be sorted and "
+                                  "without repetitions" ) );
+   }
+
+  if( which.size() == f_m )   // all of them, i.e. the data set as it comes
+   which.clear();
+  }
+
+ if( which == v_afeat )       // nothing changes, not even a Modification
+  return;
+
+ if( ! not_dry_run( issueMod ) )
+  return;
+
+ v_afeat = std::move( which );
+
+ v_amask.clear();
+ if( ! v_afeat.empty() ) {
+  v_amask.assign( f_m , false );
+  for( auto j : v_afeat )
+   v_amask[ j ] = true;
+  }
+
+ /* The Gram matrix and the lists of nonzeroes are both computed on the
+  * features that were active when they were built, hence both go; the
+  * scale of the Gaussian kernel, which the data decides, goes with them. */
+
+ drop_K();
+ drop_sparse();
+ f_gamma_res = 0;
+ v_dcoef.clear();
+
+ /* The Gram matrix is the Hessian of the dual, hence the latter changes as a
+  * whole; in the primal the features are the coefficients of the model, which
+  * change as well, and in either case the representation is built anew. */
+
+ update_abstract( eARAll , issueMod , issueAMod );
+
+ if( issue_pmod( issueMod ) )
+  Block::add_Modification( std::make_shared< SVMBlockMod >(
+                            this , SVMBlockMod::eChgFeatures ) ,
+                           Observer::par2chnl( issueMod ) );
+
+ }  // end( SVMBlock::set_active_features )
 
 /*--------------------------------------------------------------------------*/
 
@@ -1226,7 +1287,9 @@ void SVMBlock::add_abstract_samples( Index kk , ModParam issueAMod )
 
      v_coeff_pair coeffs( f_m + 2 );
      for( Index j = 0 ; j < f_m ; ++j )
-      coeffs[ j ] = std::make_pair( & v_w[ j ] , sk * xi[ j ] );
+      coeffs[ j ] = std::make_pair( & v_w[ j ] ,
+                                    is_active_feature( j ) ? sk * xi[ j ]
+                                                           : double( 0 ) );
 
      coeffs[ f_m ] = std::make_pair( & f_b_var , sk );
      coeffs[ f_m + 1 ] = std::make_pair( px[ k ] , double( 1 ) );
@@ -1419,15 +1482,35 @@ void SVMBlock::update_abstract( unsigned char what , ModParam issueMod ,
   return;
   }
 
+ /* A change of one hyper-parameter can touch the bounds, the sides and the
+  * Objective at once, and each of the three issues its own Modification, or
+  * its own group of them: they are packed in one channel, so that whoever
+  * receives them receives the whole change as a single group, with the
+  * groups of each piece nested into it. */
+
+ unsigned int pieces = 0;
  if( AR & HasCns ) {
   if( what & eARBounds )
-   update_abstract_bounds( issueAMod );
+   ++pieces;
   if( what & eARSides )
-   update_abstract_sides( issueAMod );
+   ++pieces;
+  }
+ if( ( what & eARObjective ) && ( AR & HasObj ) )
+  ++pieces;
+
+ const auto iAM = open_if_needed( issueAMod , pieces );
+
+ if( AR & HasCns ) {
+  if( what & eARBounds )
+   update_abstract_bounds( iAM );
+  if( what & eARSides )
+   update_abstract_sides( iAM );
   }
 
  if( ( what & eARObjective ) && ( AR & HasObj ) )
-  update_abstract_objective( issueAMod );
+  update_abstract_objective( iAM );
+
+ close_if_needed( iAM , pieces );
 
  }  // end( SVMBlock::update_abstract )
 
@@ -1440,9 +1523,19 @@ void SVMBlock::update_abstract_bounds( ModParam issueAMod )
 
  const double ub = get_ub();
 
+ // every box changes together when C does: they travel as one group
+ const Index num = std::count_if( v_box.begin() , v_box.end() ,
+                                 [ ub ]( auto & bx ) {
+                                  return( bx.get_rhs() != ub );
+                                  } );
+ if( ! num )
+  return;
+
+ const auto iAM = open_if_needed( un_ModBlock( issueAMod ) , num );
  for( auto & bx : v_box )
   if( bx.get_rhs() != ub )
-   bx.set_rhs( ub , un_ModBlock( issueAMod ) );
+   bx.set_rhs( ub , iAM );
+ close_if_needed( iAM , num );
 
  }  // end( SVMBlock::update_abstract_bounds )
 
@@ -1461,12 +1554,22 @@ void SVMBlock::update_abstract_sides( ModParam issueAMod )
   return;
   }
 
+ Index num = 0;
  Index k = 0;
+ for( auto & ck : v_cons )
+  if( ck.get_lhs() != - v_dq[ k++ ] )
+   ++num;
+ if( ! num )
+  return;
+
+ const auto iAM = open_if_needed( un_ModBlock( issueAMod ) , num );
+ k = 0;
  for( auto & ck : v_cons ) {
   if( ck.get_lhs() != - v_dq[ k ] )
-   ck.set_lhs( - v_dq[ k ] , un_ModBlock( issueAMod ) );
+   ck.set_lhs( - v_dq[ k ] , iAM );
   ++k;
   }
+ close_if_needed( iAM , num );
 
  }  // end( SVMBlock::update_abstract_sides )
 
@@ -1499,13 +1602,17 @@ void SVMBlock::update_abstract_objective( ModParam issueAMod )
 
   /* The diagonal and the linear coefficients of a QuadFunction are those of
    * the DQuadFunction it derives from, whence they are set through the
-   * latter; the off-diagonal terms, which it adds, are left alone. */
-  static_cast< DQuadFunction * >( f_obj.get_function()
-   )->modify_terms( quad.begin() , lin.begin() , Range( 0 , N ) ,
-                    un_ModBlock( issueAMod ) );
+   * latter; the off-diagonal terms, which it adds, are left alone. The
+   * terms and the constant travel together, being one change. */
+  const auto iAM = open_if_needed( un_ModBlock( issueAMod ) , 2 );
 
   static_cast< DQuadFunction * >( f_obj.get_function()
-   )->set_constant_term( get_dual_constant() , un_ModBlock( issueAMod ) );
+   )->modify_terms( quad.begin() , lin.begin() , Range( 0 , N ) , iAM );
+
+  static_cast< DQuadFunction * >( f_obj.get_function()
+   )->set_constant_term( get_dual_constant() , iAM );
+
+  close_if_needed( iAM , 2 );
   return;
   }
 
@@ -1607,29 +1714,66 @@ double SVMBlock::get_gamma( void ) const
  if( f_gamma_res > 0 )
   return( f_gamma_res );
 
- if( f_gamma == dGammaScale ) {
-  // 1 / ( m * Var( X ) ), with the variance taken over all the entries
-  const double sz = double( v_X.size() );
-  double mean = 0;
-  for( auto xi : v_X )
-   mean += xi;
-  mean /= sz;
+ const Index ma = get_NActiveFeatures();
 
-  double var = 0;
-  for( auto xi : v_X )
-   var += ( xi - mean ) * ( xi - mean );
+ if( f_gamma == dGammaScale ) {
+  /* 1 / ( m * Var( X ) ), with the variance taken over all the entries of
+   * the data set, save that the entries of an inactive feature are none of
+   * the kernel's business and are therefore left out of both. */
+
+  double sz , mean = 0 , var = 0;
+
+  if( v_afeat.empty() ) {
+   sz = double( v_X.size() );
+   for( auto xi : v_X )
+    mean += xi;
+   mean /= sz;
+
+   for( auto xi : v_X )
+    var += ( xi - mean ) * ( xi - mean );
+   }
+  else {
+   sz = double( f_n ) * ma;
+   for( Index i = 0 ; i < f_n ; ++i ) {
+    const double * xi = get_x( i );
+    for( auto j : v_afeat )
+     mean += xi[ j ];
+    }
+   mean /= sz;
+
+   for( Index i = 0 ; i < f_n ; ++i ) {
+    const double * xi = get_x( i );
+    for( auto j : v_afeat )
+     var += ( xi[ j ] - mean ) * ( xi[ j ] - mean );
+    }
+   }
+
   var /= sz;
 
   if( var > 0 )
-   return( f_gamma_res = 1 / ( f_m * var ) );
+   return( f_gamma_res = 1 / ( ma * var ) );
   }
 
- return( f_gamma_res = 1 / double( f_m ) );  // dGammaAuto, or a
-                                             // degenerate data set
+ return( f_gamma_res = 1 / double( ma ) );  // dGammaAuto, or a
+                                            // degenerate data set
 
  }  // end( SVMBlock::get_gamma )
 
 /*--------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::set_sparse_density( double density )
+{
+ if( ( density < 0 ) || ( density > 1 ) )
+  throw( std::invalid_argument(
+      "SVMBlock::set_sparse_density: the density must be between 0 and 1" ) );
+
+ f_sparse_density = density;
+
+ drop_sparse();   // what is built was built under the previous one
+
+ }  // end( SVMBlock::set_sparse_density )
 
 /*--------------------------------------------------------------------------*/
 
@@ -1642,6 +1786,11 @@ void SVMBlock::build_sparse( void ) const
  v_Xv.clear();
  v_Xn2.clear();
 
+ // a density of zero is "read them dense whatever they hold", and the
+ // nonzeroes need not even be counted
+ if( ! f_sparse_density )
+  return;
+
  if( ( ! f_n ) || ( ! f_m ) || ( v_X.size() < std::size_t( f_n ) * f_m ) )
   return;
 
@@ -1650,10 +1799,10 @@ void SVMBlock::build_sparse( void ) const
   if( xi != 0 )
    ++nnz;
 
- /* A tenth of the entries is where the merge stops paying [see v_Xp]: above
-  * it the dense reading wins, and the lists would only cost the memory. */
+ /* Above the density that set_sparse_density() holds the dense reading wins,
+  * and the lists would only cost the memory. */
 
- if( double( nnz ) > 0.1 * double( f_n ) * double( f_m ) )
+ if( double( nnz ) > f_sparse_density * double( f_n ) * double( f_m ) )
   return;
 
  v_Xp.resize( f_n + 1 );
@@ -1666,7 +1815,7 @@ void SVMBlock::build_sparse( void ) const
   const double * x = get_x( i );
   double n2 = 0;
   for( Index j = 0 ; j < f_m ; ++j )
-   if( x[ j ] != 0 ) {
+   if( ( x[ j ] != 0 ) && is_active_feature( j ) ) {
     v_Xi.push_back( j );
     v_Xv.push_back( x[ j ] );
     n2 += x[ j ] * x[ j ];
@@ -1753,40 +1902,20 @@ double SVMBlock::kernel( const double * x , const double * z ) const
 {
  switch( f_kernel ) {
 
-  case( kLinear ): {
-   double d = 0;
-   for( Index j = 0 ; j < f_m ; ++j )
-    d += x[ j ] * z[ j ];
-   return( d );
-   }
+  case( kLinear ):
+   return( dot( x , z ) );
 
-  case( kPoly ): {
-   double d = 0;
-   for( Index j = 0 ; j < f_m ; ++j )
-    d += x[ j ] * z[ j ];
-   return( std::pow( get_gamma() * d + f_coef0 , f_degree ) );
-   }
+  case( kPoly ):
+   return( std::pow( get_gamma() * dot( x , z ) + f_coef0 , f_degree ) );
 
-  case( kGaussian ): {
-   double d = 0;
-   for( Index j = 0 ; j < f_m ; ++j )
-    d += ( x[ j ] - z[ j ] ) * ( x[ j ] - z[ j ] );
-   return( std::exp( - get_gamma() * d ) );
-   }
+  case( kGaussian ):
+   return( std::exp( - get_gamma() * dist2( x , z ) ) );
 
-  case( kLaplacian ): {
-   double d = 0;
-   for( Index j = 0 ; j < f_m ; ++j )
-    d += std::abs( x[ j ] - z[ j ] );
-   return( std::exp( - get_gamma() * d ) );
-   }
+  case( kLaplacian ):
+   return( std::exp( - get_gamma() * dist1( x , z ) ) );
 
-  case( kSigmoid ): {
-   double d = 0;
-   for( Index j = 0 ; j < f_m ; ++j )
-    d += x[ j ] * z[ j ];
-   return( std::tanh( get_gamma() * d + f_coef0 ) );
-   }
+  case( kSigmoid ):
+   return( std::tanh( get_gamma() * dot( x , z ) + f_coef0 ) );
   }
 
  throw( std::logic_error( "SVMBlock::kernel: unknown kernel type" ) );
@@ -1807,13 +1936,16 @@ SVMBlock::c_doubleVec & SVMBlock::get_K( void ) const
  if( f_kernel != kLinear )
   get_gamma();
 
+ // and so are the lists of the nonzeroes, for the same reason: kernel()
+ // builds them the first time it is asked for one, and the threads below
+ // would all be asking at once [see build_sparse()]
+ if( ! f_sparse )
+  build_sparse();
+
  /* One row per iteration, each writing the upper part of its own row and the
   * corresponding part of the symmetric column, so that every entry is written
   * exactly once. The rows have very different lengths, whence the dynamic
-  * scheduling; a small data set is not worth a thread, and is done here. How
-  * many threads is decided by the data set and not by the machine alone: one
-  * every dParallelK rows, since on a machine with hundreds of cores starting
-  * them all costs more than filling the matrix does. */
+  * scheduling; a small data set is not worth a thread, and is done here. */
  const std::size_t n = f_n;
  auto row = [ this , n ]( const long i ) {
   v_K[ std::size_t( i ) * n + i ] = kernel( Index( i ) , Index( i ) );
@@ -1824,11 +1956,24 @@ SVMBlock::c_doubleVec & SVMBlock::get_K( void ) const
    }
   };
 
+ /* How many threads is decided by what they would do and by what they cost,
+  * both of which are measured: a row of the matrix is n entries of m
+  * features each, and a thread is worth starting when the rows it is given
+  * cost more than starting it does. On a machine with hundreds of cores, and
+  * on a data set of a few hundred samples, this hands the whole thing to one
+  * thread, which is the right answer. */
+
  const unsigned ncores = std::max< unsigned >( 1 ,
 					std::thread::hardware_concurrency() );
+
+ const double per_row = double( f_n ) * f_m * dDotCost;
+ const double rows = ( per_row > 0 ) ? dThreadCost / per_row
+                                     : double( f_n );
+
  const unsigned nthreads = std::max< unsigned >(
-			     1 , std::min< unsigned >( ncores ,
-						       f_n / dParallelK ) );
+			     1 , std::min< double >( ncores ,
+                                                     f_n / std::max( rows ,
+                                                          double( 1 ) ) ) );
 
  if( nthreads > 1 ) {
   /* The threads are started once and kept: on a machine with hundreds of
@@ -1925,20 +2070,25 @@ const double * SVMBlock::K_row( Index i , bool full ) const
  if( i >= f_n )
   throw( std::invalid_argument( "SVMBlock::get_K_row: no such row" ) );
 
- // the whole matrix is there, or fits in the budget: read it out of it
+ // whoever asked for the whole matrix has it: read the row out of it
  if( v_K.size() == std::size_t( f_n ) * f_n )
   return( v_K.data() + std::size_t( i ) * f_n );
 
- const double whole = double( f_n ) * double( f_n ) * sizeof( double );
- if( whole <= f_K_memory )
-  return( get_K().data() + std::size_t( i ) * f_n );
-
- /* The cache: as many rows as the budget pays for, and never fewer than the
+ /* A budget that would pay for the whole matrix is not a reason to compute
+  * it: what decides is how many of its rows the algorithm reads, which is a
+  * fraction of them whenever the support set is one, and the cache pays for
+  * the rows that are read alone. A budget above the matrix simply means that
+  * the cache never evicts anything, i.e., that the matrix is built as it is
+  * read and once. The whole of it is computed only for whoever asks for the
+  * whole of it [see get_K()].
+  *
+  * The cache: as many rows as the budget pays for, and never fewer than the
   * two an algorithm holds while it updates along a pair. */
 
  if( ! f_K_slots ) {
   const double room = f_K_memory / ( double( f_n ) * sizeof( double ) );
-  f_K_slots = std::max< Index >( 2 , Index( room ) );
+  // more slots than rows is memory that nothing can ever use
+  f_K_slots = std::min( f_n , std::max< Index >( 2 , Index( room ) ) );
   v_K_cache.resize( std::size_t( f_K_slots ) * f_n );
   v_K_slot.assign( f_K_slots , f_n );   // f_n = "this slot holds nothing"
   f_K_words = ( std::size_t( f_n ) + 63 ) / 64;
@@ -2409,7 +2559,9 @@ void SVMBlock::generate_abstract_constraints( Configuration * stcc )
 
       v_coeff_pair coeffs( f_m + 2 );
       for( Index j = 0 ; j < f_m ; ++j )
-       coeffs[ j ] = std::make_pair( & v_w[ j ] , sk * xi_k[ j ] );
+       coeffs[ j ] = std::make_pair( & v_w[ j ] ,
+                                     is_active_feature( j ) ? sk * xi_k[ j ]
+                                                            : double( 0 ) );
 
       coeffs[ f_m ] = std::make_pair( & f_b_var , sk );
       coeffs[ f_m + 1 ] = std::make_pair( &(*(xk++)) , double( 1 ) );
@@ -2477,7 +2629,9 @@ void SVMBlock::generate_abstract_constraints( Configuration * stcc )
 
      v_coeff_pair coeffs( f_m + 2 );
      for( Index j = 0 ; j < f_m ; ++j )
-      coeffs[ j ] = std::make_pair( & v_w[ j ] , sk * xi[ j ] );
+      coeffs[ j ] = std::make_pair( & v_w[ j ] ,
+                                    is_active_feature( j ) ? sk * xi[ j ]
+                                                           : double( 0 ) );
 
      coeffs[ f_m ] = std::make_pair( & f_b_var , sk );
      coeffs[ f_m + 1 ] = std::make_pair( &(*(xk++)) , double( 1 ) );
@@ -2871,8 +3025,12 @@ SVMBlock::doubleVec SVMBlock::get_w( void ) const
   if( ! c[ i ] )
    continue;
   const double * xi = get_x( i );
-  for( Index j = 0 ; j < f_m ; ++j )
-   w[ j ] += c[ i ] * xi[ j ];
+  if( v_afeat.empty() )
+   for( Index j = 0 ; j < f_m ; ++j )
+    w[ j ] += c[ i ] * xi[ j ];
+  else
+   for( auto j : v_afeat )
+    w[ j ] += c[ i ] * xi[ j ];
   }
 
  // the linear term of the primal shifts the weights [see set_linear_term()]

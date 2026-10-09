@@ -520,8 +520,8 @@ static void check_change( const std::string & kind , int form ,
  check_close( objective_value( a ) , objective_value( b ) , 1e-9 ,
               what + ": the same Objective as if generated anew" );
 
- bool ok = ( a->get_dynamic_constraints().size() ==
-             b->get_dynamic_constraints().size() );
+ bool ok = ( a->get_dynamic_constraint_groups().size() ==
+             b->get_dynamic_constraint_groups().size() );
 
  if( form == SVMBlock::kWolfeDual ) {
   auto ba = a->get_dynamic_constraint< LB0Constraint >( "box" );
@@ -1182,8 +1182,8 @@ int main( int argc , char ** argv )
          ( ! ben.get_dynamic_variable< ColVariable >( "alpha" ) ) ,
          "the master has the model and no slack" );
 
-  check( ben.get_static_constraints().empty() &&
-         ben.get_dynamic_constraints().empty() ,
+  check( ben.get_static_constraint_groups().empty() &&
+         ben.get_dynamic_constraint_groups().empty() ,
          "the master has no Constraint, the model being free" );
 
   // every dual index is in exactly one chunk, with its slack and its margin
@@ -1868,25 +1868,32 @@ int main( int argc , char ** argv )
           ( sol->get_b() == svm.get_b() ) && sol->get_w().empty() ,
           "it is the model the Solver has found" );
 
-  /* Any other Solution saves the abstract representation, which only the
-   * SVMBlock can fill: it is generated now, and the default Configuration
-   * has to give the usual ColVariableSolution. */
+  /* What the Solver gives does not depend on the Configuration: the abstract
+   * representation is generated now, and even asked with the default one the
+   * answer is still the model, which is what a "physical" Solver has to give
+   * [see Solver::is_get_Solution_physical()]. */
   SimpleConfiguration< int > dual( SVMBlock::kWolfeDual );
   svm.generate_abstract_variables( & dual );
   svm.generate_abstract_constraints();
   svm.generate_objective();
 
-  auto other = solver->get_Solution();
-  check( dynamic_cast< ColVariableSolution * >( other ) ,
-         "any other Solution comes from the SVMBlock" );
+  check( solver->is_get_Solution_physical() ,
+         "the Solver says it does not go through the Variable" );
 
-  // whatever it is, it has to be the same model
+  auto other = dynamic_cast< SVMBlockSolution * >( solver->get_Solution() );
+  check( other , "the model comes back whatever is asked for" );
+
+  /* And it is the model: it goes back into the SVMBlock, from there into the
+   * Variable, and reading them gives it again, which is the trip whoever
+   * wants the solution in the abstract representation makes. */
   if( other ) {
    svm.set_dual_solution( doubleVec( svm.get_NDual() , 0 ) , 0 );
    other->write( & svm );
+   svm.set_solution_in_abstract();
+   svm.set_dual_solution( doubleVec( svm.get_NDual() , 0 ) , 0 );
    svm.get_solution_from_abstract();
    check_close( primal_value( & svm ) , solver->get_var_value() , 1e-8 ,
-                "the same model, whoever provides the Solution" );
+                "the same model, once the Solution is written in the Block" );
    }
 
   delete other;
@@ -2099,6 +2106,58 @@ int main( int argc , char ** argv )
    check_close( train( in ) , train( & out ) , 1e-8 ,
                 "same optimal value after the round trip" );
    delete in;
+   }
+  }
+
+ // the two readings of a sample- - - - - - - - - - - - - - - - - - - - - - -
+
+ std::cout << "dense and sparse samples" << std::endl;
+ {
+  doubleVec X , y;
+  make_svc_data( 80 , 20 , X , y , 7 );
+
+  // a sample keeps a twentieth of its features, which is well inside the
+  // range where reading the nonzeroes pays [see SVMBlock::set_sparse_density]
+  std::mt19937 rng( 11 );
+  std::uniform_real_distribution< double > coin( 0 , 1 );
+  for( auto & xi : X )
+   if( coin( rng ) > 0.05 )
+    xi = 0;
+
+  for( auto kernel : { SVMBlock::kLinear , SVMBlock::kPoly ,
+                       SVMBlock::kSigmoid , SVMBlock::kGaussian ,
+                       SVMBlock::kLaplacian } ) {
+   SVCBlock dense , sparse;
+   for( auto svm : { & dense , & sparse } ) {
+    svm->set_kernel( kernel , 0.5 );
+    svm->set_C( 1 );
+    svm->load( 80 , 20 , X , y );
+    }
+
+   dense.set_sparse_density( 0 );    // never read them sparse
+   sparse.set_sparse_density( 1 );   // always read them sparse
+
+   const std::string tag = "kernel " + std::to_string( kernel );
+
+   /* The kernels that are a function of the inner product agree to the bit,
+    * the merge skipping products that are zero and adding zero to a sum
+    * leaving it where it is; the other two rewrite the norm, hence they
+    * agree to the rounding of that rewriting and no further. */
+
+   const double tol = ( ( kernel == SVMBlock::kGaussian ) ||
+                        ( kernel == SVMBlock::kLaplacian ) ) ? 1e-14 : 0;
+   bool same = true;
+   for( Index i = 0 ; i < 80 ; ++i )
+    for( Index j = 0 ; j < 80 ; ++j ) {
+     const double a = dense.kernel( i , j ) , b = sparse.kernel( i , j );
+     if( std::abs( a - b ) > tol * ( 1 + std::abs( b ) ) )
+      same = false;
+     }
+
+   check( same , "the same kernel read dense and read sparse, " + tag );
+
+   check_close( train( & dense ) , train( & sparse ) , 1e-12 ,
+                "the same optimal value either way, " + tag );
    }
   }
 

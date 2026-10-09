@@ -104,11 +104,42 @@ if (NOT CMAKE_INSTALL_RPATH)
 endif ()
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
+# ----- The machine's own values --------------------------------------------- #
+# The defaults of a few of the parameters are rules whose coefficients are
+# properties of the machine: they are measured here, at the first compilation,
+# and written into a header that is not part of the sources. Cross-compiling
+# there is no machine to measure, and the conservative values the module
+# carries are used instead.
+
+if (NOT CMAKE_CROSSCOMPILING)
+    set(archHeader ${CMAKE_CURRENT_SOURCE_DIR}/include/SVMBlockArch.h)
+
+    add_executable(svm_arch tools/svm_arch.cpp)
+    target_compile_features(svm_arch PRIVATE cxx_std_20)
+    find_package(Threads REQUIRED)
+    target_link_libraries(svm_arch PRIVATE Threads::Threads)
+
+    add_custom_command(
+            OUTPUT ${archHeader}
+            COMMAND "$<TARGET_FILE:svm_arch>"
+                    ${CMAKE_CURRENT_SOURCE_DIR}/include
+            DEPENDS svm_arch
+            COMMENT "Measuring the machine svm_arch is compiled on"
+            VERBATIM
+    )
+
+    add_custom_target(generate_svm_arch DEPENDS ${archHeader})
+endif ()
+
 # ----- Library ------------------------------------------------------------- #
 # With the BUILD_SHARED_LIBS variable we can specify if the library will
 # be STATIC or SHARED, so no reason to do it now.
 add_library(${modName})
-target_compile_features(${modName} PUBLIC cxx_std_17)
+target_compile_features(${modName} PUBLIC cxx_std_20)
+
+if (NOT CMAKE_CROSSCOMPILING)
+    add_dependencies(${modName} generate_svm_arch)
+endif ()
 
 # The name of the shared library carries the version of its binary interface,
 # which any minor release may change while the major version is 0, and then
@@ -122,8 +153,25 @@ set_target_properties(${modName} PROPERTIES
         VERSION ${PROJECT_VERSION}
         SOVERSION ${soVersion})
 
-if (MSVC AND BUILD_SHARED_LIBS)
-    target_link_options(${modName} INTERFACE "/INCLUDE:SMSpp_force_load_${modName}")
+# The classes of the module register themselves in the factory from a static
+# initialiser, and a linker that drops what looks unused takes the
+# registration away with it: the target tells whoever links it to keep the
+# symbol that forces the module in, or the library as a whole where naming
+# the symbol is not enough.
+if (BUILD_SHARED_LIBS)
+    if (MSVC)
+        target_link_options(${modName} INTERFACE
+                "/INCLUDE:SMSpp_force_load_${modName}")
+    elseif (UNIX AND (NOT APPLE))
+        # the ELF linker decides by the symbols a regular object asks for, so
+        # naming the symbol is not enough and the library has to be kept
+        target_link_options(${modName} INTERFACE "LINKER:--no-as-needed")
+    elseif (APPLE)
+        # ld64 keeps a dylib that provides a symbol to the link, one asked
+        # for by -u included, even under -dead_strip_dylibs
+        target_link_options(${modName} INTERFACE
+                "LINKER:-u,_SMSpp_force_load_${modName}")
+    endif ()
 endif ()
 
 # When adding source files with target_sources(), PRIVATE means that the files
@@ -188,16 +236,40 @@ endif ()
 
 # ----- Custom commands and targets ----------------------------------------- #
 
+# The version of the archive in the Package Registry. A published version is
+# never replaced: new data go out under a new version, written here first [see
+# data/upload-libsvm], and the archive and the marker of its extraction carry it
+# in their name, so that a tree holding the data of an older version (a cache
+# of the CI, or a clone that has been extracted before) downloads and extracts
+# again instead of taking them for the current ones.
+set(DATA_VERSION 2026-09-06)
+
 # Download libsvm.tgz from GitLab Package Registry if it doesn't exist: the
 # data sets of the LIBSVM repository, in the sparse text format that
 # SVMBlock::load( istream , 'l' ) reads, which the batches of tests/SVMBlock
 # run on
-set(DATA_URL "https://gitlab.com/api/v4/projects/85124108/packages/generic/libsvm/latest/libsvm.tgz")
-set(DATA_ARCHIVE ${CMAKE_CURRENT_SOURCE_DIR}/data/libsvm.tgz)
+set(DATA_URL "https://gitlab.com/api/v4/projects/85124108/packages/generic/libsvm/${DATA_VERSION}/libsvm.tgz")
+set(DATA_ARCHIVE ${CMAKE_CURRENT_SOURCE_DIR}/data/libsvm-${DATA_VERSION}.tgz)
+set(DATA_MARKER ${CMAKE_CURRENT_SOURCE_DIR}/data/.extracted-${DATA_VERSION})
 set(DATA_SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/download_svm_libsvm.cmake)
 
 file(WRITE ${DATA_SCRIPT} "
-file(DOWNLOAD \"${DATA_URL}\" \"${DATA_ARCHIVE}\" SHOW_PROGRESS)
+file(DOWNLOAD \"${DATA_URL}\" \"${DATA_ARCHIVE}\" SHOW_PROGRESS STATUS _status)
+list(GET _status 0 _code)
+list(GET _status 1 _message)
+if(NOT _code EQUAL 0)
+  # what is on disk is whatever the server answered with, and leaving it there
+  # would let the build take it for the archive: the next attempt has to
+  # download again rather than fail while extracting it
+  file(REMOVE \"${DATA_ARCHIVE}\")
+  message(FATAL_ERROR \"cannot download ${DATA_URL}: \${_message}\")
+endif()
+file(SIZE \"${DATA_ARCHIVE}\" _size)
+if(_size LESS 1024)
+  file(REMOVE \"${DATA_ARCHIVE}\")
+  message(FATAL_ERROR \"${DATA_ARCHIVE} came down with \${_size} bytes, so the \
+server answered but not with the archive: try again later\")
+endif()
 ")
 
 add_custom_command(
@@ -211,12 +283,12 @@ add_custom_command(
 add_custom_target(download_svm_libsvm
         DEPENDS ${DATA_ARCHIVE})
 
-# Custom command to extract the libsvm.tgz archive if the .extracted file does
-# not exist
+# Custom command to extract the libsvm.tgz archive if the marker of this version
+# does not exist
 add_custom_command(
-        OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/data/.extracted
-        COMMAND tar xzf ${CMAKE_CURRENT_SOURCE_DIR}/data/libsvm.tgz
-        COMMAND echo > ${CMAKE_CURRENT_SOURCE_DIR}/data/.extracted
+        OUTPUT ${DATA_MARKER}
+        COMMAND tar xzf ${DATA_ARCHIVE}
+        COMMAND echo > ${DATA_MARKER}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/data
         COMMENT "Extracting libsvm.tgz"
         VERBATIM
@@ -224,7 +296,7 @@ add_custom_command(
 
 # Create custom targets to run the data extraction
 add_custom_target(extract_svm_libsvm
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/data/.extracted)
+        DEPENDS ${DATA_MARKER})
 
 # Ensure that extract_svm_libsvm is executed after the download
 add_dependencies(extract_svm_libsvm download_svm_libsvm)
