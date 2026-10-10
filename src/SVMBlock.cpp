@@ -3204,15 +3204,11 @@ void SVMBlock::delete_abstract( void )
   * representation, in which case recomputing the Gram matrix would be a
   * needless O( n^2 m ). */
 
- for( auto & cnst : v_cons )
-  cnst.clear();
- for( auto & cnst : v_xi_box )
-  cnst.clear();
+ Constraint::clear( v_cons );
+ Constraint::clear( v_xi_box );
  f_eq.clear();
- for( auto & cnst : v_box )
-  cnst.clear();
- for( auto & cnst : v_link )
-  cnst.clear();
+ Constraint::clear( v_box );
+ Constraint::clear( v_link );
 
  f_obj.clear();
 
@@ -3232,12 +3228,6 @@ void SVMBlock::delete_abstract( void )
  else
   for( auto sub : v_Block )
    static_cast< SVMBlock * >( sub )->delete_abstract();
-
- v_link.clear();
-
- v_cons.clear();
- v_xi_box.clear();
- v_box.clear();
 
  v_xi.clear();
  v_w.clear();
