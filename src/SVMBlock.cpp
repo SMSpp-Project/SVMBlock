@@ -455,7 +455,7 @@ void SVMBlock::set_C( double C , ModParam issueMod , ModParam issueAMod )
 
  update_abstract( what , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgC ) ,
                            Observer::par2chnl( issueMod ) );
@@ -519,7 +519,7 @@ void SVMBlock::set_active_features( Subset && which , bool all ,
 
  update_abstract( eARAll , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgFeatures ) ,
                            Observer::par2chnl( issueMod ) );
@@ -566,7 +566,7 @@ void SVMBlock::set_kernel( int type , double gamma , int degree ,
  update_abstract( ( AR & PrimalF ) ? eARNone : eARAll , issueMod ,
                   issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgKernel ) ,
                            Observer::par2chnl( issueMod ) );
@@ -595,7 +595,7 @@ void SVMBlock::set_squared_loss( bool squared , ModParam issueMod ,
 
  update_abstract( what , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgSquaredLoss ) ,
                            Observer::par2chnl( issueMod ) );
@@ -622,7 +622,7 @@ void SVMBlock::set_reg_bias( bool reg , ModParam issueMod ,
  update_abstract( remap() | ( ( AR & PrimalF ) ? eARObjective : eARAll ) ,
                   issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgRegBias ) ,
                            Observer::par2chnl( issueMod ) );
@@ -655,7 +655,7 @@ void SVMBlock::set_reg_weight( double weight , ModParam issueMod ,
  update_abstract( ( AR & PrimalF ) ? eARObjective : eARAll , issueMod ,
                   issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgRegWeight ) ,
                            Observer::par2chnl( issueMod ) );
@@ -706,7 +706,7 @@ void SVMBlock::set_linear_term( c_doubleVec & lambda , double mu ,
   * right-hand side of the equality constraint. */
  update_abstract( eARObjective | eARSides , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgLinTerm ) ,
                            Observer::par2chnl( issueMod ) );
@@ -846,7 +846,7 @@ void SVMBlock::chg_target( double ny , Index i , ModParam issueMod ,
 
  update_abstract( remap_targets( std::move( o_y ) ) , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockRngdMod >(
                             this , SVMBlockMod::eChgTargets ,
                             Range( i , i + 1 ) ) ,
@@ -875,7 +875,7 @@ void SVMBlock::chg_targets( c_doubleVec_it ny , Range rng ,
 
  update_abstract( remap_targets( std::move( o_y ) ) , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockRngdMod >(
                             this , SVMBlockMod::eChgTargets , rng ) ,
                            Observer::par2chnl( issueMod ) );
@@ -915,7 +915,7 @@ void SVMBlock::chg_targets( c_doubleVec_it ny , Subset && nms , bool ordered ,
 
  update_abstract( remap_targets( std::move( o_y ) ) , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockSbstMod >(
                             this , SVMBlockMod::eChgTargets ,
                             std::move( nms ) ) ,
@@ -1043,7 +1043,7 @@ void SVMBlock::add_samples( Index k , c_doubleVec & X , c_doubleVec & y ,
  if( not_dry_run( issueAMod ) )
   add_abstract_samples( get_NDual() - o_di.size() , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockRngdMod >(
                             this , SVMBlockMod::eAddSamples ,
                             Range( o_n , f_n ) ) ,
@@ -1152,7 +1152,7 @@ void SVMBlock::remove_samples( Subset && nms , bool ordered ,
  if( not_dry_run( issueAMod ) )
   rmv_abstract_samples( dk , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockSbstMod >(
                             this , SVMBlockMod::eRmvSamples ,
                             std::move( nms ) ) ,
@@ -1680,7 +1680,7 @@ void SVMBlock::rebuild_abstract( ModParam issueMod )
    generate_objective();
   }
 
- if( issue_pmod( issueMod ) && anyone_there() )
+ if( issue_pmod( issueMod , Modification::eModPhys ) && anyone_there() )
   Block::add_Modification( std::make_shared< NBModification >( this ) ,
                            Observer::par2chnl( issueMod ) );
 
