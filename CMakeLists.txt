@@ -104,7 +104,7 @@ if (NOT CMAKE_INSTALL_RPATH)
 endif ()
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
-# ----- The machine's own values --------------------------------------------- #
+# ----- The machine's own values -------------------------------------------- #
 # The defaults of a few of the parameters are rules whose coefficients are
 # properties of the machine: they are measured here, at the first compilation,
 # and written into a header that is not part of the sources. Cross-compiling
