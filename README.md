@@ -1,5 +1,10 @@
 # SVMBlock
 
+[![Pipeline](https://gitlab.com/smspp/svmblock/badges/develop/pipeline.svg)](https://gitlab.com/smspp/svmblock/-/pipelines?ref=develop)
+[![Documentation](https://img.shields.io/badge/docs-Doxygen-blue)](https://smspp.gitlab.io/smspp-project/)
+[![C++ Standard](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)
+
 Definition and implementation of the `SVMBlock` class, which implements the
 `Block` interface within the SMS++ framework for the training problem of a
 *Support Vector Machine* (SVM), together with the ad hoc `SMOSolver` and with
