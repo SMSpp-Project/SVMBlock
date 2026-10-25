@@ -44,6 +44,12 @@ SVMBkH   = $(SVMBkSDR)/include/SVMBlock.h \
 	$(SVMBkSDR)/include/LIBLINEARSolver.h \
 	$(SVMBkSDR)/include/SVMBlockArch.h
 
+# the C++20 module smspp.svmblock - - - - - - - - - - - - - - - - - - - - - -
+# [see makefile-mod of SMS++]
+
+$(eval $(call SMSppMODrule,SVMBk,$(SVMBkSDR),SVMBlock,smspp.svmblock,\
+	$(SMS++MOD)))
+
 # clean - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 clean::
