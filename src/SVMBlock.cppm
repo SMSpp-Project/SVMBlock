@@ -31,8 +31,6 @@ module;
 #include "LIBSVMSolver.h"
 #include "SMOSolver.h"
 #include "SVCBlock.h"
-#include "SVMBlock.h"
-#include "SVMBlockArch.h"
 #include "SVRBlock.h"
 
 /*--------------------------------------------------------------------------*/
