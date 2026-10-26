@@ -20,10 +20,10 @@ DIR = .
 CC = clang++
 
 # common flags
-COMMON_SW = -std=c++20 -ferror-limit=1 -Wno-enum-compare
+COMMON_SW = -std=c++20 $(SMSppSWERR) -Wno-enum-compare
 
 # debug switches
-SW_DEBUG = -g3 -glldb -fno-inline $(COMMON_SW)
+SW_DEBUG = -g3 $(SMSppSWDBG) -fno-inline $(COMMON_SW)
 
 # production switches
 SW_RELEASE = -O3 $(COMMON_SW) -DNDEBUG

@@ -48,7 +48,7 @@ SVMBkH   = $(SVMBkSDR)/include/SVMBlock.h \
 # [see makefile-mod of SMS++]
 
 $(eval $(call SMSppMODrule,SVMBk,$(SVMBkSDR),SVMBlock,smspp.svmblock,\
-	$(SMS++MOD)))
+	SMS++))
 
 # clean - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 

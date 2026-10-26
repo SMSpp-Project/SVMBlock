@@ -209,6 +209,14 @@ target_include_directories(
 # on this library.
 target_link_libraries(${modName} PUBLIC ${modNamespace}::SMS++)
 
+# FastFlow, which src/SVMBlock.cpp includes: inside the umbrella it comes with
+# the build interface of SMS++, which an installed SMS++ does not carry, so
+# that a build of this module alone fetches it [see FastFlow.cmake of SMS++]
+if (NOT hasParent)
+    smspp_fetch_fastflow()
+    target_include_directories(${modName} PRIVATE ${fastflow_SOURCE_DIR})
+endif ()
+
 if (SVMBlock_USE_LIBSVM)
     message(STATUS "SVMBlock: LIBSVM found, configuring LIBSVMSolver")
     target_sources(${modName} PRIVATE src/LIBSVMSolver.cpp)
