@@ -34,7 +34,8 @@ include(FindPackageHandleStandardArgs)
 # Drop the cached paths if one of them does not exist any more, so that
 # they are all searched again from the same place
 set(_LIBLINEAR_cached LIBLINEAR_INCLUDE_DIR LIBLINEAR_LIBRARY
-        LIBLINEAR_LIBRARY_DEBUG LIBLINEAR_DLL LIBLINEAR_DLL_DEBUG)
+        LIBLINEAR_LIBRARY_DEBUG LIBLINEAR_DLL LIBLINEAR_DLL_DEBUG
+        LIBLINEAR_VERSION)
 foreach (_var ${_LIBLINEAR_cached})
     foreach (_path ${${_var}})
         if (IS_ABSOLUTE "${_path}" AND NOT EXISTS "${_path}")
@@ -52,6 +53,12 @@ unset(_LIBLINEAR_cached)
 unset(_LIBLINEAR_stale)
 unset(_var)
 unset(_path)
+
+# The cached version is the one of the include directory it was read from
+if (NOT "${LIBLINEAR_INCLUDE_DIR}" STREQUAL
+        "${_LIBLINEAR_VERSION_INCLUDE_DIR}")
+    unset(LIBLINEAR_VERSION CACHE)
+endif ()
 
 # Check if already in cache
 if (WIN32)
@@ -172,6 +179,15 @@ if (NOT LIBLINEAR_FOUND)
                 REQUIRED_VARS LIBLINEAR_LIBRARY LIBLINEAR_INCLUDE_DIR
                 VERSION_VAR LIBLINEAR_VERSION)
     endif ()
+endif ()
+
+# A found package keeps its version in the cache, with the include
+# directory it was read from
+if (LIBLINEAR_FOUND)
+    set(LIBLINEAR_VERSION "${LIBLINEAR_VERSION}" CACHE INTERNAL
+            "LIBLINEAR version.")
+    set(_LIBLINEAR_VERSION_INCLUDE_DIR "${LIBLINEAR_INCLUDE_DIR}"
+            CACHE INTERNAL "Include directory of the LIBLINEAR version.")
 endif ()
 
 # ----- Export the target --------------------------------------------------- #

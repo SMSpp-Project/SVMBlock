@@ -34,7 +34,7 @@ include(FindPackageHandleStandardArgs)
 # Drop the cached paths if one of them does not exist any more, so that
 # they are all searched again from the same place
 set(_LIBSVM_cached LIBSVM_INCLUDE_DIR LIBSVM_LIBRARY LIBSVM_LIBRARY_DEBUG
-        LIBSVM_DLL LIBSVM_DLL_DEBUG)
+        LIBSVM_DLL LIBSVM_DLL_DEBUG LIBSVM_VERSION)
 foreach (_var ${_LIBSVM_cached})
     foreach (_path ${${_var}})
         if (IS_ABSOLUTE "${_path}" AND NOT EXISTS "${_path}")
@@ -52,6 +52,12 @@ unset(_LIBSVM_cached)
 unset(_LIBSVM_stale)
 unset(_var)
 unset(_path)
+
+# The cached version is the one of the include directory it was read from
+if (NOT "${LIBSVM_INCLUDE_DIR}" STREQUAL
+        "${_LIBSVM_VERSION_INCLUDE_DIR}")
+    unset(LIBSVM_VERSION CACHE)
+endif ()
 
 # Check if already in cache
 if (WIN32)
@@ -171,6 +177,15 @@ if (NOT LIBSVM_FOUND)
                 REQUIRED_VARS LIBSVM_LIBRARY LIBSVM_INCLUDE_DIR
                 VERSION_VAR LIBSVM_VERSION)
     endif ()
+endif ()
+
+# A found package keeps its version in the cache, with the include
+# directory it was read from
+if (LIBSVM_FOUND)
+    set(LIBSVM_VERSION "${LIBSVM_VERSION}" CACHE INTERNAL
+            "LIBSVM version.")
+    set(_LIBSVM_VERSION_INCLUDE_DIR "${LIBSVM_INCLUDE_DIR}"
+            CACHE INTERNAL "Include directory of the LIBSVM version.")
 endif ()
 
 # ----- Export the target --------------------------------------------------- #
