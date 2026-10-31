@@ -31,6 +31,28 @@
 # --------------------------------------------------------------------------- #
 include(FindPackageHandleStandardArgs)
 
+# Drop the cached paths if one of them does not exist any more, so that
+# they are all searched again from the same place
+set(_LIBLINEAR_cached LIBLINEAR_INCLUDE_DIR LIBLINEAR_LIBRARY
+        LIBLINEAR_LIBRARY_DEBUG LIBLINEAR_DLL LIBLINEAR_DLL_DEBUG)
+foreach (_var ${_LIBLINEAR_cached})
+    foreach (_path ${${_var}})
+        if (IS_ABSOLUTE "${_path}" AND NOT EXISTS "${_path}")
+            set(_LIBLINEAR_stale TRUE)
+        endif ()
+    endforeach ()
+endforeach ()
+if (_LIBLINEAR_stale)
+    message(STATUS "Cached LIBLINEAR paths not found, searching again")
+    foreach (_var ${_LIBLINEAR_cached})
+        unset(${_var} CACHE)
+    endforeach ()
+endif ()
+unset(_LIBLINEAR_cached)
+unset(_LIBLINEAR_stale)
+unset(_var)
+unset(_path)
+
 # Check if already in cache
 if (WIN32)
     if (LIBLINEAR_INCLUDE_DIR AND LIBLINEAR_LIBRARY AND LIBLINEAR_LIBRARY_DEBUG

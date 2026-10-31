@@ -31,6 +31,28 @@
 # --------------------------------------------------------------------------- #
 include(FindPackageHandleStandardArgs)
 
+# Drop the cached paths if one of them does not exist any more, so that
+# they are all searched again from the same place
+set(_LIBSVM_cached LIBSVM_INCLUDE_DIR LIBSVM_LIBRARY LIBSVM_LIBRARY_DEBUG
+        LIBSVM_DLL LIBSVM_DLL_DEBUG)
+foreach (_var ${_LIBSVM_cached})
+    foreach (_path ${${_var}})
+        if (IS_ABSOLUTE "${_path}" AND NOT EXISTS "${_path}")
+            set(_LIBSVM_stale TRUE)
+        endif ()
+    endforeach ()
+endforeach ()
+if (_LIBSVM_stale)
+    message(STATUS "Cached LIBSVM paths not found, searching again")
+    foreach (_var ${_LIBSVM_cached})
+        unset(${_var} CACHE)
+    endforeach ()
+endif ()
+unset(_LIBSVM_cached)
+unset(_LIBSVM_stale)
+unset(_var)
+unset(_path)
+
 # Check if already in cache
 if (WIN32)
     if (LIBSVM_INCLUDE_DIR AND LIBSVM_LIBRARY AND LIBSVM_LIBRARY_DEBUG
