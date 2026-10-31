@@ -41,6 +41,14 @@ if (WIN32 AND BUILD_SHARED_LIBS AND NOT DEFINED ENV{CONDA_BUILD})
             $<TARGET_FILE_DIR:${modName}_test>
             COMMAND_EXPAND_LISTS
             COMMENT "Copying runtime DLLs next to ${modName}_test.exe")
+    # one link at a time, since two copies of the same DLL into a
+    # directory collide, and Ninja links in parallel
+    get_property(_pools GLOBAL PROPERTY JOB_POOLS)
+    if (NOT _pools MATCHES "smspp_runtime_dlls=")
+        set_property(GLOBAL APPEND PROPERTY JOB_POOLS smspp_runtime_dlls=1)
+    endif ()
+    set_property(TARGET ${modName}_test
+                 PROPERTY JOB_POOL_LINK smspp_runtime_dlls)
 endif ()
 
 add_test(NAME ${modName}_test
