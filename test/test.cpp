@@ -53,6 +53,8 @@
 
 #include <iostream>
 
+#include <map>
+
 #include <random>
 
 /*--------------------------------------------------------------------------*/
@@ -139,10 +141,12 @@ static double primal_value( const SVMBlock * svm )
 
   v += svm->get_linear_bias() * b;
 
+  // the margins only read the features that are active
   for( Index i = 0 ; i < n ; ++i ) {
    const double * xi = svm->get_x( i );
    for( Index j = 0 ; j < m ; ++j )
-    f[ i ] += w[ j ] * xi[ j ];
+    if( svm->is_active_feature( j ) )
+     f[ i ] += w[ j ] * xi[ j ];
    }
   }
  else {
@@ -245,6 +249,57 @@ static double objective_value( Block * blk )
  }  // end( objective_value )
 
 /*--------------------------------------------------------------------------*/
+/// the name of a formulation, as the labels of the checks give it
+
+static std::string form_name( int form )
+{
+ switch( form ) {
+  case( SVMBlock::kWolfeDual ):
+   return( "dual: " );
+  case( SVMBlock::kPrimal ):
+   return( "primal: " );
+  default:
+   return( "dual with the weights: " );
+  }
+ }
+
+/*--------------------------------------------------------------------------*/
+/// the rows z = Z^T alpha and t = s^T alpha of the dual with the weights
+/** Each row as the map from the dual index of a multiplier, or -1 for z_j or
+ * t, to its coefficient, so that the rows of two SVMBlock can be compared
+ * whatever the order of their terms. */
+
+static std::vector< std::map< long , double > > weight_rows( SVMBlock * svm )
+{
+ std::map< const Variable * , long > idx;
+ {
+  long k = 0;
+  for( auto & ak : *svm->get_dynamic_variable< ColVariable >( "alpha" ) )
+   idx[ &ak ] = k++;
+  }
+
+ std::vector< std::map< long , double > > rows;
+ auto read = [ & ]( FRowConstraint & row ) {
+  std::map< long , double > r;
+  auto lf = static_cast< LinearFunction * >( row.get_function() );
+  for( const auto & [ var , c ] : lf->get_v_var() ) {
+   auto it = idx.find( var );
+   r[ it == idx.end() ? -1 : it->second ] = c;
+   }
+  rows.push_back( std::move( r ) );
+  };
+
+ if( auto zdef = svm->get_static_constraint_v< FRowConstraint >( "zdef" ) )
+  for( auto & row : *zdef )
+   read( row );
+ if( auto tdef = svm->get_static_constraint< FRowConstraint >( "tdef" ) )
+  read( *tdef );
+
+ return( rows );
+
+ }  // end( weight_rows )
+
+/*--------------------------------------------------------------------------*/
 /// checks that the abstract representation agrees with the physical one
 /** Generates the abstract representation of the given formulation, sets its
  * Variable to the model currently stored in \p svm and checks that the value
@@ -268,6 +323,26 @@ static void check_abstract( SVMBlock * svm , int form , double expected ,
   Index k = 0;
   for( auto & ak : *av )
    ak.set_value( alpha[ k++ ] );
+  }
+ else if( form == SVMBlock::kWDual ) {
+  // the multipliers, and z and t out of them
+  svm->set_solution_in_abstract();
+
+  // whose rows hold, z being Z^T alpha computed out of the data
+  bool hold = true;
+  for( auto * name : { "zdef" , "tdef" } ) {
+   std::vector< FRowConstraint * > rows;
+   if( auto v = svm->get_static_constraint_v< FRowConstraint >( name ) )
+    for( auto & r : *v )
+     rows.push_back( &r );
+   if( auto r = svm->get_static_constraint< FRowConstraint >( name ) )
+    rows.push_back( r );
+   for( auto r : rows ) {
+    r->get_function()->compute();
+    hold &= std::abs( r->get_function()->get_value() ) < 1e-9;
+    }
+   }
+  check( hold , what + ": z = Z^T alpha and t = s^T alpha" );
   }
  else
   fill_primal( svm , svm->get_w() , svm->get_b() );
@@ -406,7 +481,7 @@ static double from_scratch( const SVMBlock * svm )
  }  // end( from_scratch )
 
 /*--------------------------------------------------------------------------*/
-/// trains a fresh SVMBlock holding the training problem of \p svm without \p out
+/// trains a fresh SVMBlock on the training problem of \p svm without \p out
 /** Trains, from scratch and with a Solver of its own, a new SVMBlock with the
  * hyper-parameters of \p svm and its data set *minus* the samples \p out:
  * this is the value that unlearning them has to give [see
@@ -523,7 +598,11 @@ static void check_change( const std::string & kind , int form ,
  bool ok = ( a->get_dynamic_constraint_groups().size() ==
              b->get_dynamic_constraint_groups().size() );
 
- if( form == SVMBlock::kWolfeDual ) {
+ if( form == SVMBlock::kWDual )
+  check( weight_rows( a ) == weight_rows( b ) ,
+	 what + ": the same rows z = Z^T alpha as if generated anew" );
+
+ if( form != SVMBlock::kPrimal ) {
   auto ba = a->get_dynamic_constraint< LB0Constraint >( "box" );
   auto bb = b->get_dynamic_constraint< LB0Constraint >( "box" );
   ok &= ba && bb && ( ba->size() == bb->size() );
@@ -642,15 +721,23 @@ int main( int argc , char ** argv )
    train( & prm );   // check_abstract() fills the Variable with the model
    check_abstract( & prm , SVMBlock::kPrimal , value ,
                    "abstract primal, " + tag );
+
+   SVCBlock wdl;
+   wdl.set_kernel( SVMBlock::kLinear );
+   wdl.set_C( 1 );
+   wdl.set_reg_weight( rw );
+   wdl.load( 40 , 3 , X , y );
+   train( &wdl );
+   check_abstract( &wdl , SVMBlock::kWDual , value ,
+		   "abstract dual with the weights, " + tag );
    }
 
   // and it can be changed with the abstract representation there
-  for( int form = SVMBlock::kWolfeDual ; form <= SVMBlock::kPrimal ; ++form )
-   check_change( "SVCBlock" , form , X , y , 40 , 3 ,
-                 []( SVMBlock * svm ) { svm->set_reg_weight( 0.4 ); } ,
-                 std::string( form == SVMBlock::kWolfeDual ? "dual: "
-                                                           : "primal: " ) +
-                 "the weight of the regularisation" );
+  for( int form = SVMBlock::kWolfeDual ; form <= SVMBlock::kWDual ; ++form )
+   check_change(
+     "SVCBlock" , form , X , y , 40 , 3 ,
+     []( SVMBlock * svm ) { svm->set_reg_weight( 0.4 ); } ,
+     form_name( form ) + "the weight of the regularisation" );
   }
 
  // the linear term of the primal - - - - - - - - - - - - - - - - - - - - - -
@@ -708,6 +795,35 @@ int main( int argc , char ** argv )
      train( & prm );  // check_abstract() fills the Variable with the model
      check_abstract( & prm , SVMBlock::kPrimal , value ,
                      "abstract primal, " + tag );
+
+     SVCBlock wdl;
+     wdl.set_kernel( SVMBlock::kLinear );
+     wdl.set_C( 1 );
+     wdl.set_reg_bias( rb );
+     wdl.set_reg_weight( rw );
+     wdl.load( 40 , 3 , X , y );
+     wdl.set_linear_term( lambda , mu );
+     train( &wdl );
+     check_abstract( &wdl , SVMBlock::kWDual , value ,
+		     "abstract dual with the weights, " + tag );
+
+     /* A feature that is not active is in no constraint of the primal and
+      * in no entry of the Gram matrix: its weight is - lambda_j / rw
+      * whatever the multipliers, and its share of the linear term enters
+      * the constant of the dual alone, not its linear coefficients. */
+     SVCBlock act;
+     act.set_kernel( SVMBlock::kLinear );
+     act.set_C( 1 );
+     act.set_reg_bias( rb );
+     act.set_reg_weight( rw );
+     act.load( 40 , 3 , X , y );
+     act.set_linear_term( lambda , mu );
+     act.set_active_features( Block::Subset( { 0 , 2 } ) );
+     const double av = train( &act );
+     check_close( primal_value( &act ) , av , 1e-6 ,
+		  "strong duality with a feature not active, " + tag );
+     check_abstract( &act , SVMBlock::kWolfeDual , av ,
+		     "abstract dual with a feature not active, " + tag );
      }
 
   /* A Lagrangian Solver changes the multipliers at each of its iterations,
@@ -819,15 +935,14 @@ int main( int argc , char ** argv )
     }
 
   // and it can be changed with the abstract representation there
-  for( int form = SVMBlock::kWolfeDual ; form <= SVMBlock::kPrimal ; ++form )
-   check_change( "SVCBlock" , form , X , y , 40 , 3 ,
-                 [ &lambda ]( SVMBlock * svm ) {
-                  svm->set_kernel( SVMBlock::kLinear );
-                  svm->set_linear_term( lambda , 0.2 );
-                  } ,
-                 std::string( form == SVMBlock::kWolfeDual ? "dual: "
-                                                           : "primal: " ) +
-                 "the linear term" );
+  for( int form = SVMBlock::kWolfeDual ; form <= SVMBlock::kWDual ; ++form )
+   check_change(
+     "SVCBlock" , form , X , y , 40 , 3 ,
+     [ &lambda ]( SVMBlock * svm ) {
+      svm->set_kernel( SVMBlock::kLinear );
+      svm->set_linear_term( lambda , 0.2 );
+      } ,
+     form_name( form ) + "the linear term" );
   }
 
  // the same, but through the primal formulation- - - - - - - - - - - - - - -
@@ -1461,7 +1576,8 @@ int main( int argc , char ** argv )
   // the solution of the problem that sample is not part of
   check( smo->unlearn( sv ) == Solver::kOK , "a support vector is unlearnt" );
   check( smo->get_iter() > 0 , "which does take events" );
-  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) , 1e-8 ,
+  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) ,
+               1e-8 ,
                "and gives exactly the problem without it" );
 
   // the sample is still in the SVMBlock, and a compute() brings it back
@@ -1494,7 +1610,8 @@ int main( int argc , char ** argv )
   find_support( & svm , sv , nsv );
   check( smo->unlearn( sv ) == Solver::kOK ,
          "a support vector is unlearnt with the squared loss" );
-  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) , 1e-8 ,
+  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) ,
+               1e-8 ,
                "and gives the problem without it" );
   svm.set_squared_loss( false );
 
@@ -1503,7 +1620,8 @@ int main( int argc , char ** argv )
   find_support( & svm , sv , nsv );
   check( smo->unlearn( sv ) == Solver::kOK ,
          "a support vector is unlearnt with the bias regularised" );
-  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) , 1e-8 ,
+  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) ,
+               1e-8 ,
                "and gives the problem without it" );
 
   // and it is the same walk with a kernel that is not the linear one
@@ -1513,7 +1631,8 @@ int main( int argc , char ** argv )
   find_support( & svm , sv , nsv );
   check( smo->unlearn( sv ) == Solver::kOK ,
          "a support vector is unlearnt with a nonlinear kernel" );
-  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) , 1e-8 ,
+  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) ,
+               1e-8 ,
                "and gives the problem without it" );
 
   svm.unregister_Solver( solver );
@@ -1603,7 +1722,8 @@ int main( int argc , char ** argv )
 
   check( smo->unlearn( sv ) == Solver::kOK ,
          "a support vector of a regression is unlearnt" );
-  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) , 1e-8 ,
+  check_close( smo->get_var_value() , without_samples( & svm , { sv } ) ,
+               1e-8 ,
                "and gives the problem without it" );
 
   if( nsv < n ) {
@@ -1628,10 +1748,8 @@ int main( int argc , char ** argv )
   make_svc_data( n , m , Xc , yc , 19 );
   make_svr_data( n , m , Xr , yr , 23 );
 
-  for( int form = SVMBlock::kWolfeDual ; form <= SVMBlock::kPrimal ;
-       ++form ) {
-   const std::string frm = ( form == SVMBlock::kWolfeDual ) ? "dual: "
-                                                            : "primal: ";
+  for( int form = SVMBlock::kWolfeDual ; form <= SVMBlock::kWDual ; ++form ) {
+   const std::string frm = form_name( form );
 
    check_change( "SVCBlock" , form , Xc , yc , n , m ,
                  []( SVMBlock * svm ) { svm->set_C( 12 ); } ,
@@ -1732,6 +1850,35 @@ int main( int argc , char ** argv )
    }
   catch( const std::exception & e ) { caught = true; }
   check( caught , "a nonlinear kernel is refused under the primal" );
+
+  // nor under the dual with the weights, which is not even generated for one
+  caught = false;
+  try {
+   SVCBlock svm;
+   svm.load( n , m , Xc , yc );
+   SimpleConfiguration< int > cfg( SVMBlock::kWDual );
+   svm.generate_abstract_variables( &cfg );
+   svm.set_kernel( SVMBlock::kGaussian );
+   }
+  catch( const std::exception & e ) {
+   caught = true;
+   }
+  check( caught , "a nonlinear kernel is refused under the dual with the "
+		 "weights" );
+
+  caught = false;
+  try {
+   SVCBlock svm;
+   svm.set_kernel( SVMBlock::kGaussian );
+   svm.load( n , m , Xc , yc );
+   SimpleConfiguration< int > cfg( SVMBlock::kWDual );
+   svm.generate_abstract_variables( &cfg );
+   }
+  catch( const std::exception & e ) {
+   caught = true;
+   }
+  check( caught , "the dual with the weights is not generated for a "
+		 "nonlinear kernel" );
   }
 
  // the Solution saving the trained model - - - - - - - - - - - - - - - - - -

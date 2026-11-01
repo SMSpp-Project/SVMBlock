@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `SVMBlock::kWDual`, a third formulation of the abstract representation for
+  the linear kernel: the Wolfe dual with the variables `z = Z^T alpha`
+  explicit (and `t = s^T alpha` if the bias is regularised), whose Hessian is
+  diagonal and whose rows are as sparse as the data, so that a quadratic
+  `Solver` that checks the Hessian for convexity does not reject the dual
+  of a data set with more samples than features, whose Gram matrix is
+  singular; it follows every change as the dual does, the samples added and
+  removed included, and the weight of the regularisation and the linear
+  term only change its `Objective`
+
 - the makefiles build the C++20 module `smspp.svmblock` when `SMSppMOD` is
   not empty (e.g., `make SMSppMOD=1`), with clang++ 16 or later [see
   `lib/makefile-mod` of SMS++]
@@ -42,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before extracts once more
 
 ### Fixed
+
+- the dual shifts of the linear term of a chunk took the features that are
+  not active as well, which are in no constraint of the primal and in no
+  entry of the Gram matrix: with some feature not active the dual was not
+  the one of the primal
 
 - `FindLIBSVM.cmake` and `LIBSVMSolver.h` take `svm.h` also right in the
   include directory, as the Homebrew package installs it, and not only in a

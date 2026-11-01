@@ -23,7 +23,7 @@ epsilon-insensitive loss for regression, and both can either keep the bias out
 of the regularisation term or fold it into the weight vector.
 
 The `Block` holds the data set, the hyper-parameters and the kernel, and its
-abstract representation can encode either of two problems, selected through a
+abstract representation can encode one of three problems, selected through a
 `Configuration`:
 
 - the **training problem** itself, a quadratic program in the weights, the
@@ -39,7 +39,16 @@ abstract representation can encode either of two problems, selected through a
   it the *only* thing there is for them. It is written as the maximisation it
   customarily is, so that strong duality, which holds since the training
   problem is convex, makes the value of the `Objective` the very same number
-  whichever of the two is encoded.
+  whichever of the three is encoded;
+
+- for the linear kernel, the same Wolfe dual with the **weights** explicit,
+  i.e., with the variables `z = Z^T alpha` and their defining rows, which are
+  as sparse as the data: its Hessian is diagonal, while that of the dual is
+  the Gram matrix of the samples, whose rank is at most the number of
+  features, so that a quadratic `Solver` checking it for convexity (e.g.,
+  MOSEK) can reject it on the rounding errors alone, and storing it takes
+  memory quadratic in the number of samples rather than linear in the size of
+  the data.
 
 The training problem can also be written as one problem per chunk of samples,
 each with its own copy of the model and an even share of the regularisation
