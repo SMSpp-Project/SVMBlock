@@ -43,6 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `FindLIBSVM.cmake` and `LIBSVMSolver.h` take `svm.h` also right in the
+  include directory, as the Homebrew package installs it, and not only in a
+  `libsvm` directory: on macOS LIBSVMSolver was left out of the build by
+  CMake, and did not compile with the makefiles
+
 - on Windows, the executables that copy their DLLs next to themselves
   are linked one at a time (a job pool of Ninja), since two copies of the
   same DLL into one directory collided (e.g., with the clang++ of MSYS2)

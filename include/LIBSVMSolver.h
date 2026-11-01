@@ -28,7 +28,13 @@
 
 #include "Solver.h"
 
-#include <libsvm/svm.h>
+// svm.h is in a libsvm directory in some distributions, and right in the
+// include directory in others
+#if __has_include( <libsvm/svm.h> )
+ #include <libsvm/svm.h>
+#else
+ #include <svm.h>
+#endif
 
 /*--------------------------------------------------------------------------*/
 /*------------------------------ NAMESPACE ---------------------------------*/

@@ -74,11 +74,12 @@ endif ()
 if (NOT LIBSVM_FOUND)
 
     # ----- Find the LIBSVM include directory ------------------------------- #
-    # svm.h is included as <libsvm/svm.h>, which is where every distribution
-    # puts it (the Debian and Homebrew packages, the vcpkg port), hence what
-    # is searched for is the directory *containing* the libsvm one.
+    # svm.h is in a libsvm directory in some distributions (the Debian
+    # package, the vcpkg port) and right in the include directory in others
+    # (the Homebrew package): what is searched for is the directory holding
+    # either, and LIBSVMSolver.h includes the one that is there.
     find_path(LIBSVM_INCLUDE_DIR
-            NAMES libsvm/svm.h
+            NAMES libsvm/svm.h svm.h
             PATHS ${LIBSVM_ROOT}
             PATH_SUFFIXES include
             DOC "LIBSVM include directory.")
@@ -144,9 +145,14 @@ if (NOT LIBSVM_FOUND)
     # ----- Parse the version ----------------------------------------------- #
     # LIBSVM_VERSION is an integer, e.g. 324 for 3.24
     if (LIBSVM_INCLUDE_DIR)
-        file(STRINGS
-                "${LIBSVM_INCLUDE_DIR}/libsvm/svm.h"
+        if (EXISTS "${LIBSVM_INCLUDE_DIR}/libsvm/svm.h")
+            set(_LIBSVM_header "${LIBSVM_INCLUDE_DIR}/libsvm/svm.h")
+        else ()
+            set(_LIBSVM_header "${LIBSVM_INCLUDE_DIR}/svm.h")
+        endif ()
+        file(STRINGS "${_LIBSVM_header}"
                 _LIBSVM_version_line REGEX "#define LIBSVM_VERSION")
+        unset(_LIBSVM_header)
 
         string(REGEX REPLACE ".*LIBSVM_VERSION *\([0-9]*\).*" "\\1"
                 _LIBSVM_version "${_LIBSVM_version_line}")
