@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-03
+
 ### Added
 
 - `SVMBlock::kWDual`, a third formulation of the abstract representation for
@@ -96,7 +98,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   debugging information, which clang++ and g++ spell differently
   (`-ferror-limit=1` and `-glldb` against `-fmax-errors=1` and `-ggdb`),
   from `SMSppSWERR` and `SMSppSWDBG` of `lib/makefile-OS` of SMS++
-
 
 ## [0.3.0] - 2026-10-09
 
@@ -370,7 +371,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - the package configuration file finds the libraries the module links, so that
   a project using the installed module needs nothing more than find_package()
 
-[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.3.0...develop
+[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.4.0...develop
+[0.4.0]: https://gitlab.com/smspp/svmblock/-/compare/0.3.0...0.4.0
 [0.3.0]: https://gitlab.com/smspp/svmblock/-/compare/0.2.0...0.3.0
 [0.2.0]: https://gitlab.com/smspp/svmblock/-/compare/0.1.0...0.2.0
 [0.1.0]: https://gitlab.com/smspp/svmblock/-/tags/0.1.0
