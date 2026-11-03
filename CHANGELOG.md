@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-03
+
+### Added
+
+- `SVMBlock::kWDual`, a third formulation of the abstract representation for
+  the linear kernel: the Wolfe dual with the variables `z = Z^T alpha`
+  explicit (and `t = s^T alpha` if the bias is regularised), whose Hessian is
+  diagonal and whose rows are as sparse as the data, so that a quadratic
+  `Solver` that checks the Hessian for convexity does not reject the dual
+  of a data set with more samples than features, whose Gram matrix is
+  singular; it follows every change as the dual does, the samples added and
+  removed included, and the weight of the regularisation and the linear
+  term only change its `Objective`
+
+- the makefiles build the C++20 module `smspp.svmblock` when `SMSppMOD` is
+  not empty (e.g., `make SMSppMOD=1`), with clang++ 16 or later [see
+  `lib/makefile-mod` of SMS++]
+
+- the C++20 module `smspp.svmblock` (`src/SVMBlock.cppm`), which exports
+  every name that the headers declare at namespace scope and re-exports
+  `smspp`, so that a source file can write `import smspp.svmblock;` in place
+  of the `#include` of the headers; it is built with the CMake option
+  `SMSpp_BUILD_MODULE`, as the target `SMS++::SVMBlock_module`
+
+### Changed
+
+- the README leaves the channels that distribute SMS++ to the
+  installation guide of the wiki (Installing-SMS++), keeping the names
+  of the packages of the module
+
+- the pipeline builds the module also with its makefiles, after CMake, and
+  runs on a change of the makefiles too [see `ci/makefile` of the umbrella]
+
+- `SMSpp_BUILD_MODULE` no longer stops the configuration when the C++20
+  module cannot be built, i.e., with a CMake older than 3.28, a generator
+  other than Ninja or Visual Studio, a compiler other than Clang 16 (with
+  `clang-scan-deps`) or MSVC 19.34, or a module it imports that is not
+  there: the option is turned off with a warning that says why, and the
+  build goes on with the headers [see `cmake/CheckModule.cmake` of SMS++]
+
+- the instances of `data/` are downloaded and extracted by the targets
+  `download_svm_<fmt>` and `extract_svm_<fmt>`, written as in every module
+  that keeps its instances in the Package Registry, and the marker of the
+  extraction carries the format in its name, so that a tree extracted
+  before extracts once more
+
+### Fixed
+
+- the dual shifts of the linear term of a chunk took the features that are
+  not active as well, which are in no constraint of the primal and in no
+  entry of the Gram matrix: with some feature not active the dual was not
+  the one of the primal
+
+- `FindLIBSVM.cmake` and `LIBSVMSolver.h` take `svm.h` also right in the
+  include directory, as the Homebrew package installs it, and not only in a
+  `libsvm` directory: on macOS LIBSVMSolver was left out of the build by
+  CMake, and did not compile with the makefiles
+
+- on Windows, the executables that copy their DLLs next to themselves
+  are linked one at a time (a job pool of Ninja), since two copies of the
+  same DLL into one directory collided (e.g., with the clang++ of MSYS2)
+
+- with the compilers of MinGW (MSYS2) the target asks whoever links it
+  for the symbol that forces the module in, as with MSVC and on macOS:
+  the linker imports a DLL only for the symbols asked for, so that a
+  program that used none had the module left out and its classes
+  missing from the factory
+
+- `cmake/FindLIBSVM.cmake` and `cmake/FindLIBLINEAR.cmake` keep the version
+  of a found library in the cache, with the include directory it is read
+  from, and read it again when that directory changes: the check of the cache
+  wanted the version, which was not cached, so that every configure searched
+  the library again
+
+- `cmake/FindLIBSVM.cmake` and `cmake/FindLIBLINEAR.cmake` drop the cached
+  paths of LIBSVM and LIBLINEAR when one of them does not exist any more
+  (e.g., in a build directory configured once outside and once inside a
+  container, or after an upgrade), so that all of them are searched again;
+  the stale include directory was kept, since `find_path()` does not search a
+  cached one again, and the configuration stopped on reading the version from
+  a header that is not there
+
+- a build of the module alone, with `find_package()`, fetches FastFlow,
+  which `SVMBlock.cpp` includes and which an installed SMS++ does not carry
+  [see `cmake/FastFlow.cmake` of SMS++]
+
+- the makefiles of the tests and of the tools build also with g++: they
+  take the option that stops at the first error and the one of the
+  debugging information, which clang++ and g++ spell differently
+  (`-ferror-limit=1` and `-glldb` against `-fmax-errors=1` and `-ggdb`),
+  from `SMSppSWERR` and `SMSppSWDBG` of `lib/makefile-OS` of SMS++
+
 ## [0.3.0] - 2026-10-09
 
 ### Added
@@ -279,7 +371,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - the package configuration file finds the libraries the module links, so that
   a project using the installed module needs nothing more than find_package()
 
-[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.3.0...develop
+[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.4.0...develop
+[0.4.0]: https://gitlab.com/smspp/svmblock/-/compare/0.3.0...0.4.0
 [0.3.0]: https://gitlab.com/smspp/svmblock/-/compare/0.2.0...0.3.0
 [0.2.0]: https://gitlab.com/smspp/svmblock/-/compare/0.1.0...0.2.0
 [0.1.0]: https://gitlab.com/smspp/svmblock/-/tags/0.1.0

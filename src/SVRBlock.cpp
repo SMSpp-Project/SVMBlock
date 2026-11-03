@@ -56,7 +56,7 @@ void SVRBlock::set_epsilon( double epsilon , ModParam issueMod ,
  // remap() takes care of
  update_abstract( remap() , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgEpsilon ) ,
                            Observer::par2chnl( issueMod ) );

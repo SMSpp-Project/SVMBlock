@@ -1,5 +1,11 @@
 # SVMBlock
 
+[![Pipeline](https://gitlab.com/smspp/svmblock/badges/develop/pipeline.svg)](https://gitlab.com/smspp/svmblock/-/pipelines?ref=develop)
+[![Release](https://gitlab.com/smspp/svmblock/-/badges/release.svg)](https://gitlab.com/smspp/svmblock/-/releases)
+[![Documentation](https://img.shields.io/badge/docs-Doxygen-blue)](https://smspp.gitlab.io/smspp-project/)
+[![C++ Standard](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)
+
 Definition and implementation of the `SVMBlock` class, which implements the
 `Block` interface within the SMS++ framework for the training problem of a
 *Support Vector Machine* (SVM), together with the ad hoc `SMOSolver` and with
@@ -17,7 +23,7 @@ epsilon-insensitive loss for regression, and both can either keep the bias out
 of the regularisation term or fold it into the weight vector.
 
 The `Block` holds the data set, the hyper-parameters and the kernel, and its
-abstract representation can encode either of two problems, selected through a
+abstract representation can encode one of three problems, selected through a
 `Configuration`:
 
 - the **training problem** itself, a quadratic program in the weights, the
@@ -33,7 +39,16 @@ abstract representation can encode either of two problems, selected through a
   it the *only* thing there is for them. It is written as the maximisation it
   customarily is, so that strong duality, which holds since the training
   problem is convex, makes the value of the `Objective` the very same number
-  whichever of the two is encoded.
+  whichever of the three is encoded;
+
+- for the linear kernel, the same Wolfe dual with the **weights** explicit,
+  i.e., with the variables `z = Z^T alpha` and their defining rows, which are
+  as sparse as the data: its Hessian is diagonal, while that of the dual is
+  the Gram matrix of the samples, whose rank is at most the number of
+  features, so that a quadratic `Solver` checking it for convexity (e.g.,
+  MOSEK) can reject it on the rounding errors alone, and storing it takes
+  memory quadratic in the number of samples rather than linear in the size of
+  the data.
 
 The training problem can also be written as one problem per chunk of samples,
 each with its own copy of the model and an even share of the regularisation
@@ -173,22 +188,11 @@ and performs the model selection around it.
 These instructions will let you build the `SVMBlock` module on
 your system.
 
-The module also comes ready-made, in any of
-
-```sh
-sudo add-apt-repository ppa:smspp-project/smspp   # Ubuntu
-sudo apt install libsmspp-svm-dev                 # and smspp-svm for the tool
-
-conda install -c conda-forge smspp-project        # Linux, macOS, Windows
-
-brew tap SMSpp-Project/smspp                      # macOS, Linux
-brew install smspp
-
-vcpkg install "smspp[core,svm]"                   # from the sources
-```
-
-where apt and the port give the module alone, while conda and the tap carry
-the whole framework. What follows is about building it yourself.
+The module also comes ready-made: on Ubuntu as `libsmspp-svm-dev` (and
+`smspp-svm` for the tool), in vcpkg as `smspp[core,svm]`, and in the other
+channels that the [installation
+guide](https://gitlab.com/smspp/smspp-project/-/wikis/Installing-SMS++) of
+SMS++ lists. What follows is about building it yourself.
 
 ### Requirements
 

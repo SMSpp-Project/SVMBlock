@@ -54,6 +54,8 @@
 
 #include <thread>
 
+#include <unordered_set>
+
 /*--------------------------------------------------------------------------*/
 /*------------------------- NAMESPACE AND USING ----------------------------*/
 /*--------------------------------------------------------------------------*/
@@ -455,7 +457,7 @@ void SVMBlock::set_C( double C , ModParam issueMod , ModParam issueAMod )
 
  update_abstract( what , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgC ) ,
                            Observer::par2chnl( issueMod ) );
@@ -519,7 +521,7 @@ void SVMBlock::set_active_features( Subset && which , bool all ,
 
  update_abstract( eARAll , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgFeatures ) ,
                            Observer::par2chnl( issueMod ) );
@@ -540,9 +542,11 @@ void SVMBlock::set_kernel( int type , double gamma , int degree ,
  if( degree <= 0 )
   throw( std::invalid_argument( _prfx + "degree must be positive" ) );
 
- if( ( type != kLinear ) && ( AR & PrimalF ) )
-  throw( std::invalid_argument( _prfx + "the primal is only available for "
-                                "the linear kernel" ) );
+ if( ( type != kLinear ) && ( AR & ( PrimalF | WDualF ) ) )
+  throw( std::invalid_argument( _prfx +
+				"the primal and the dual with the "
+				"weights are only available for the linear "
+				"kernel" ) );
 
  if( ( type == f_kernel ) && ( gamma == f_gamma ) && ( degree == f_degree )
      && ( coef0 == f_coef0 ) )
@@ -561,12 +565,12 @@ void SVMBlock::set_kernel( int type , double gamma , int degree ,
  v_dcoef.clear();
 
  /* The Gram matrix is the Hessian of the dual, hence the latter changes as a
-  * whole; the primal, which only exists for the linear kernel, rather does
-  * not depend on it at all. */
- update_abstract( ( AR & PrimalF ) ? eARNone : eARAll , issueMod ,
-                  issueAMod );
+  * whole; the primal and the dual with the weights, which only exist for the
+  * linear kernel, rather do not depend on it at all. */
+ update_abstract( ( AR & ( PrimalF | WDualF ) ) ? eARNone : eARAll , issueMod ,
+		  issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgKernel ) ,
                            Observer::par2chnl( issueMod ) );
@@ -595,7 +599,7 @@ void SVMBlock::set_squared_loss( bool squared , ModParam issueMod ,
 
  update_abstract( what , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgSquaredLoss ) ,
                            Observer::par2chnl( issueMod ) );
@@ -622,7 +626,7 @@ void SVMBlock::set_reg_bias( bool reg , ModParam issueMod ,
  update_abstract( remap() | ( ( AR & PrimalF ) ? eARObjective : eARAll ) ,
                   issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgRegBias ) ,
                            Observer::par2chnl( issueMod ) );
@@ -647,15 +651,15 @@ void SVMBlock::set_reg_weight( double weight , ModParam issueMod ,
 
  f_reg_weight = weight;
 
- /* In the primal the weight is a coefficient of the Objective, hence a local
-  * change; in the dual it divides the Hessian as a whole, the off-diagonal
-  * terms included, and those are not modified in place [see
-  * update_abstract_objective()], whence the abstract representation is
-  * rebuilt. */
- update_abstract( ( AR & PrimalF ) ? eARObjective : eARAll , issueMod ,
-                  issueAMod );
+ /* In the primal and in the dual with the weights the weight is in
+  * coefficients of the Objective, hence a local change; in the dual it
+  * divides the Hessian as a whole, the off-diagonal terms included, and
+  * those are not modified in place [see update_abstract_objective()],
+  * whence the abstract representation is rebuilt. */
+ update_abstract( ( AR & ( PrimalF | WDualF ) ) ? eARObjective : eARAll ,
+		  issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgRegWeight ) ,
                            Observer::par2chnl( issueMod ) );
@@ -706,7 +710,7 @@ void SVMBlock::set_linear_term( c_doubleVec & lambda , double mu ,
   * right-hand side of the equality constraint. */
  update_abstract( eARObjective | eARSides , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockMod >(
                             this , SVMBlockMod::eChgLinTerm ) ,
                            Observer::par2chnl( issueMod ) );
@@ -734,7 +738,8 @@ void SVMBlock::get_dual_shifts( doubleVec & shift ) const
    const double * xi = get_x( i );
    double d = 0;
    for( Index j = 0 ; j < f_m ; ++j )
-    d += v_lambda[ j ] * xi[ j ];
+    if( is_active_feature( j ) )
+     d += v_lambda[ j ] * xi[ j ];
    lx[ i ] = d;
    }
 
@@ -846,7 +851,7 @@ void SVMBlock::chg_target( double ny , Index i , ModParam issueMod ,
 
  update_abstract( remap_targets( std::move( o_y ) ) , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockRngdMod >(
                             this , SVMBlockMod::eChgTargets ,
                             Range( i , i + 1 ) ) ,
@@ -875,7 +880,7 @@ void SVMBlock::chg_targets( c_doubleVec_it ny , Range rng ,
 
  update_abstract( remap_targets( std::move( o_y ) ) , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockRngdMod >(
                             this , SVMBlockMod::eChgTargets , rng ) ,
                            Observer::par2chnl( issueMod ) );
@@ -915,7 +920,7 @@ void SVMBlock::chg_targets( c_doubleVec_it ny , Subset && nms , bool ordered ,
 
  update_abstract( remap_targets( std::move( o_y ) ) , issueMod , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockSbstMod >(
                             this , SVMBlockMod::eChgTargets ,
                             std::move( nms ) ) ,
@@ -1043,7 +1048,7 @@ void SVMBlock::add_samples( Index k , c_doubleVec & X , c_doubleVec & y ,
  if( not_dry_run( issueAMod ) )
   add_abstract_samples( get_NDual() - o_di.size() , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockRngdMod >(
                             this , SVMBlockMod::eAddSamples ,
                             Range( o_n , f_n ) ) ,
@@ -1152,7 +1157,7 @@ void SVMBlock::remove_samples( Subset && nms , bool ordered ,
  if( not_dry_run( issueAMod ) )
   rmv_abstract_samples( dk , issueAMod );
 
- if( issue_pmod( issueMod ) )
+ if( issue_pmod( issueMod , Modification::eModPhys ) )
   Block::add_Modification( std::make_shared< SVMBlockSbstMod >(
                             this , SVMBlockMod::eRmvSamples ,
                             std::move( nms ) ) ,
@@ -1208,9 +1213,37 @@ void SVMBlock::add_abstract_samples( Index kk , ModParam issueAMod )
                                                        un_ModBlock( issueAMod )
                                                        );
     }
+
+   if( AR & WDualF ) {  // the new multipliers enter z = Z^T alpha
+    auto rows = weight_row_coeffs( pa , o_N );
+    for( Index j = 0 ; j < f_m ; ++j )
+     if( ! rows[ j ].empty() )
+      static_cast< LinearFunction * >( v_zdef[ j ].get_function() )
+	->add_variables( std::move( rows[ j ] ) , un_ModBlock( issueAMod ) );
+
+    if( f_reg_bias ) {  // and t = s^T alpha
+     v_coeff_pair coeffs( kk );
+     for( Index k = 0 ; k < kk ; ++k )
+      coeffs[ k ] = std::make_pair( pa[ k ] , -v_ds[ o_N + k ] );
+
+     static_cast< LinearFunction * >( f_tdef.get_function() )
+       ->add_variables( std::move( coeffs ) , un_ModBlock( issueAMod ) );
+     }
+    }
    }
 
-  if( AR & HasObj ) {
+  if( ( AR & HasObj ) && ( AR & WDualF ) ) {
+   // the diagonal terms of the new multipliers, after all the others
+   const double d = f_squared_loss ? 1 / ( 2 * f_C ) : 0;
+
+   v_coeff_triple triples( kk );
+   for( Index k = 0 ; k < kk ; ++k )
+    triples[ k ] = std::make_tuple( pa[ k ] , -v_dq[ o_N + k ] , -d / 2 );
+
+   static_cast< DQuadFunction * >( f_obj.get_function() )
+     ->add_variables( std::move( triples ) , un_ModBlock( issueAMod ) );
+   }
+  else if( AR & HasObj ) {
    /* The new multipliers come with their own diagonal term and with their
     * row of the Hessian, i.e., the cross terms against every dual index,
     * the ones already there and the other new ones alike. The entries of
@@ -1330,11 +1363,53 @@ void SVMBlock::rmv_abstract_samples( Subset & dk , ModParam issueAMod )
 
  if( ! ( AR & PrimalF ) ) {   // the dual formulation - - - - - - - - - - - -
                               //- - - - - - - - - - - - - - - - - - - - - - -
-  if( AR & HasObj )
+  if( ( AR & HasObj ) && ( AR & WDualF ) ) {
+   // the multipliers come after z and t, which stay
+   const Index h = f_m + ( f_reg_bias ? 1 : 0 );
+   Subset ok( dk.size() );
+   for( Index t = 0 ; t < dk.size() ; ++t )
+    ok[ t ] = h + dk[ t ];
+
+   static_cast< DQuadFunction * >( f_obj.get_function() )
+     ->remove_variables( std::move( ok ) , true , un_ModBlock( issueAMod ) );
+   }
+  else if( AR & HasObj )
    static_cast< QuadFunction * >( f_obj.get_function()
                                   )->remove_variables( Subset( dk ) , true ,
                                                      un_ModBlock( issueAMod )
                                                        );
+
+  if( ( AR & HasCns ) && ( AR & WDualF ) ) {
+   /* The multipliers that go are in the rows only where their entry of the
+    * data is not zero, hence at a position that changes from row to row: it
+    * is found by scanning each row for them. */
+   std::unordered_set< const Variable * > gone;
+   { auto ak = v_alpha_var.begin();
+     Index k = 0;
+     for( auto t : dk ) {
+      std::advance( ak , t - k );
+      k = t;
+      gone.insert( &(*ak) );
+      }
+     }
+
+   auto drop = [ & ]( FRowConstraint & row ) {
+    auto lf = static_cast< LinearFunction * >( row.get_function() );
+    Subset pos;
+    const auto & pairs = lf->get_v_var();
+    for( Index h = 0 ; h < pairs.size() ; ++h )
+     if( gone.count( pairs[ h ].first ) )
+      pos.push_back( h );
+    if( ! pos.empty() )
+     lf->remove_variables( std::move( pos ) , true ,
+			   un_ModBlock( issueAMod ) );
+    };
+
+   for( auto & row : v_zdef )
+    drop( row );
+   if( f_reg_bias )
+    drop( f_tdef );
+   }
 
   if( AR & HasCns ) {
    if( ! f_reg_bias )
@@ -1579,6 +1654,25 @@ void SVMBlock::update_abstract_objective( ModParam issueAMod )
 {
  const Index N = get_NDual();
 
+ if( AR & WDualF ) {  // the dual with the weights - - - - - - - - - -
+		      //- - - - - - - - - - - - - - - - - - - - - - - -
+  doubleVec quad , lin;
+  get_wdual_terms( quad , lin );
+  const Index tot = quad.size();
+
+  // the terms and the constant travel together, being one change
+  const auto iAM = open_if_needed( un_ModBlock( issueAMod ) , 2 );
+
+  static_cast< DQuadFunction * >( f_obj.get_function() )
+    ->modify_terms( quad.begin() , lin.begin() , Range( 0 , tot ) , iAM );
+
+  static_cast< DQuadFunction * >( f_obj.get_function() )
+    ->set_constant_term( get_dual_constant() , iAM );
+
+  close_if_needed( iAM , 2 );
+  return;
+  }
+
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
   /* Only the linear coefficients and the diagonal of the Hessian are reset,
@@ -1646,6 +1740,96 @@ void SVMBlock::update_abstract_objective( ModParam issueAMod )
 
 /*--------------------------------------------------------------------------*/
 
+void SVMBlock::get_wdual_terms( doubleVec & quad , doubleVec & lin ) const
+{
+ const Index N = get_NDual();
+ const Index nt = f_reg_bias ? 1 : 0;
+ const double d = f_squared_loss ? 1 / ( 2 * f_C ) : 0;
+ const double rw = f_reg_weight;
+
+ quad.assign( f_m + nt + N , 0 );
+ lin.assign( f_m + nt + N , 0 );
+
+ // - || z - lambda ||^2 / ( 2 rw ), whose constant is get_dual_constant()
+ for( Index j = 0 ; j < f_m ; ++j ) {
+  quad[ j ] = -1 / ( 2 * rw );
+  if( ! v_lambda.empty() )
+   lin[ j ] = v_lambda[ j ] / rw;
+  }
+
+ // - ( t - mu )^2 / ( 2 rw ), mu being otherwise the side of "eq"
+ if( nt ) {
+  quad[ f_m ] = -1 / ( 2 * rw );
+  lin[ f_m ] = f_mu / rw;
+  }
+
+ // - q^T alpha - d / 2 || alpha ||^2
+ for( Index k = 0 ; k < N ; ++k ) {
+  quad[ f_m + nt + k ] = -d / 2;
+  lin[ f_m + nt + k ] = -v_dq[ k ];
+  }
+
+ }  // end( SVMBlock::get_wdual_terms )
+
+/*--------------------------------------------------------------------------*/
+
+std::vector< v_coeff_pair >
+SVMBlock::weight_row_coeffs( const std::vector< ColVariable * > & pa ,
+			     Index k0 ) const
+{
+ std::vector< v_coeff_pair > rows( f_m );
+
+ for( Index t = 0 ; t < pa.size() ; ++t ) {
+  const Index k = k0 + t;
+  const double sk = v_ds[ k ];
+  const double * xi = get_x( v_di[ k ] );
+  for( Index j = 0 ; j < f_m ; ++j )
+   if( xi[ j ] && is_active_feature( j ) )
+    rows[ j ].emplace_back( pa[ t ] , -sk * xi[ j ] );
+  }
+
+ return( rows );
+
+ }  // end( SVMBlock::weight_row_coeffs )
+
+/*--------------------------------------------------------------------------*/
+
+void SVMBlock::generate_weight_rows( void )
+{
+ std::vector< ColVariable * > pa;
+ pa.reserve( v_alpha_var.size() );
+ for( auto & ak : v_alpha_var )
+  pa.push_back( &ak );
+
+ auto rows = weight_row_coeffs( pa , 0 );
+
+ // z_j - sum_k s_k x_{ i( k ) j } alpha_k = 0
+ v_zdef.resize( f_m );
+ for( Index j = 0 ; j < f_m ; ++j ) {
+  rows[ j ].emplace( rows[ j ].begin() , &v_w[ j ] , double( 1 ) );
+  v_zdef[ j ].set_both( 0 );
+  v_zdef[ j ].set_function( new LinearFunction( std::move( rows[ j ] ) , 0 ) );
+  }
+
+ add_static_constraint( v_zdef , "zdef" );
+
+ if( f_reg_bias ) {  // t - s^T alpha = 0
+  v_coeff_pair coeffs;
+  coeffs.reserve( pa.size() + 1 );
+  coeffs.emplace_back( &f_b_var , double( 1 ) );
+  for( Index k = 0 ; k < pa.size() ; ++k )
+   coeffs.emplace_back( pa[ k ] , -v_ds[ k ] );
+
+  f_tdef.set_both( 0 );
+  f_tdef.set_function( new LinearFunction( std::move( coeffs ) , 0 ) );
+
+  add_static_constraint( f_tdef , "tdef" );
+  }
+
+ }  // end( SVMBlock::generate_weight_rows )
+
+/*--------------------------------------------------------------------------*/
+
 void SVMBlock::rebuild_abstract( ModParam issueMod )
 {
  if( AR ) {
@@ -1670,7 +1854,9 @@ void SVMBlock::rebuild_abstract( ModParam issueMod )
   /* The same parts of the same formulation are generated anew: which one it
    * was is what the bits of AR say, so that no Configuration has to be kept
    * around for this. */
-  SimpleConfiguration< int > cfg( ( oAR & PrimalF ) ? kPrimal : kWolfeDual );
+  SimpleConfiguration< int > cfg( ( oAR & PrimalF )  ? kPrimal
+				  : ( oAR & WDualF ) ? kWDual
+						     : kWolfeDual );
 
   if( oAR & HasVar )
    generate_abstract_variables( & cfg );
@@ -1680,7 +1866,7 @@ void SVMBlock::rebuild_abstract( ModParam issueMod )
    generate_objective();
   }
 
- if( issue_pmod( issueMod ) && anyone_there() )
+ if( issue_pmod( issueMod , Modification::eModPhys ) && anyone_there() )
   Block::add_Modification( std::make_shared< NBModification >( this ) ,
                            Observer::par2chnl( issueMod ) );
 
@@ -2431,22 +2617,38 @@ void SVMBlock::generate_abstract_variables( Configuration * stvv )
  if( auto sci = dynamic_cast< SimpleConfiguration< int > * >( stvv ) )
   wf = sci->f_value;
 
- if( ( wf != kWolfeDual ) && ( wf != kPrimal ) )
+ if( ( wf != kWolfeDual ) && ( wf != kPrimal ) && ( wf != kWDual ) )
   throw( std::invalid_argument( _prfx + "unknown problem" ) );
 
- if( ( wf == kPrimal ) && ( f_kernel != kLinear ) )
-  throw( std::invalid_argument( _prfx + "the primal is only available for "
-                                "the linear kernel" ) );
+ if( ( wf != kWolfeDual ) && ( f_kernel != kLinear ) )
+  throw( std::invalid_argument( _prfx +
+				"the primal and the dual with the "
+				"weights are only available for the linear "
+				"kernel" ) );
 
  const Index N = get_NDual();
 
- if( wf == kWolfeDual ) {  // the Wolfe dual - - - - - - - - - - - - - - - - -
-                           //- - - - - - - - - - - - - - - - - - - - - - - - -
+ if( wf != kPrimal ) {  // the Wolfe dual, with the weights or not- - - - -
+			//- - - - - - - - - - - - - - - - - - - - - - - - -
   v_alpha_var.resize( N );
   for( auto & ak : v_alpha_var )
    ak.set_type( ColVariable::kContinuous );
 
   add_dynamic_variable( v_alpha_var , "alpha" );
+
+  if( wf == kWDual ) {  // z = Z^T alpha and, if any, t = s^T alpha
+   AR |= WDualF;
+
+   v_w.resize( f_m );
+   for( auto & zj : v_w )
+    zj.set_type( ColVariable::kContinuous );
+   add_static_variable( v_w , "z" );
+
+   if( f_reg_bias ) {
+    f_b_var.set_type( ColVariable::kContinuous );
+    add_static_variable( f_b_var , "t" );
+    }
+   }
   }
  else {                    // the training problem itself- - - - - - - - - - -
                            //- - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2608,6 +2810,9 @@ void SVMBlock::generate_abstract_constraints( Configuration * stcc )
 
    add_static_constraint( f_eq , "eq" );
    }
+
+  if( AR & WDualF )
+   generate_weight_rows();
   }
  else {                      // the primal formulation - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
@@ -2724,6 +2929,40 @@ void SVMBlock::generate_objective( Configuration * objc )
   }
 
  const Index N = get_NDual();
+
+ if( AR & WDualF ) {  // the dual with the weights - - - - - - - - - -
+		      //- - - - - - - - - - - - - - - - - - - - - - - -
+  /* max - q^T alpha - || z - lambda ||^2 / ( 2 rw ) [ - ( t - mu )^2 /
+   * ( 2 rw ) ] - d / 2 || alpha ||^2, the terms of z first, then that of t,
+   * then those of alpha, which are the only dynamic ones and therefore the
+   * only ones that are added or removed, at the end. */
+  doubleVec quad , lin;
+  get_wdual_terms( quad , lin );
+
+  v_coeff_triple triples( quad.size() );
+  Index h = 0;
+  for( auto & zj : v_w ) {
+   triples[ h ] = std::make_tuple( &zj , lin[ h ] , quad[ h ] );
+   ++h;
+   }
+  if( f_reg_bias ) {
+   triples[ h ] = std::make_tuple( &f_b_var , lin[ h ] , quad[ h ] );
+   ++h;
+   }
+  for( auto & ak : v_alpha_var ) {
+   triples[ h ] = std::make_tuple( &ak , lin[ h ] , quad[ h ] );
+   ++h;
+   }
+
+  f_obj.set_function(
+    new DQuadFunction( std::move( triples ) , get_dual_constant() ) , eNoMod );
+
+  f_obj.set_sense( Objective::eMax , eNoMod );
+  set_objective( &f_obj , eNoMod );
+
+  AR |= HasObj;
+  return;
+  }
 
  if( ! ( AR & PrimalF ) ) {  // the dual formulation- - - - - - - - - - - - -
                              //- - - - - - - - - - - - - - - - - - - - - - - -
@@ -2935,6 +3174,26 @@ void SVMBlock::set_solution_in_abstract( void )
   Index k = 0;
   for( auto & ak : v_alpha_var )
    ak.set_value( k < alpha.size() ? alpha[ k++ ] : 0 );
+
+  if( AR & WDualF ) {  // z = Z^T alpha and t = s^T alpha, as their rows say
+   doubleVec z( f_m , 0 );
+   double t = 0;
+   for( Index h = 0 ; h < alpha.size() && h < get_NDual() ; ++h ) {
+    const double sa = v_ds[ h ] * alpha[ h ];
+    if( ! sa )
+     continue;
+    t += sa;
+    const double * xi = get_x( v_di[ h ] );
+    for( Index j = 0 ; j < f_m ; ++j )
+     if( is_active_feature( j ) )
+      z[ j ] += sa * xi[ j ];
+    }
+
+   for( Index j = 0 ; j < f_m ; ++j )
+    v_w[ j ].set_value( z[ j ] );
+   if( f_reg_bias )
+    f_b_var.set_value( t );
+   }
 
   return;
   }
@@ -3204,15 +3463,13 @@ void SVMBlock::delete_abstract( void )
   * representation, in which case recomputing the Gram matrix would be a
   * needless O( n^2 m ). */
 
- for( auto & cnst : v_cons )
-  cnst.clear();
- for( auto & cnst : v_xi_box )
-  cnst.clear();
+ Constraint::clear( v_cons );
+ Constraint::clear( v_xi_box );
+ Constraint::clear( v_zdef );
+ f_tdef.clear();
  f_eq.clear();
- for( auto & cnst : v_box )
-  cnst.clear();
- for( auto & cnst : v_link )
-  cnst.clear();
+ Constraint::clear( v_box );
+ Constraint::clear( v_link );
 
  f_obj.clear();
 
@@ -3233,14 +3490,9 @@ void SVMBlock::delete_abstract( void )
   for( auto sub : v_Block )
    static_cast< SVMBlock * >( sub )->delete_abstract();
 
- v_link.clear();
-
- v_cons.clear();
- v_xi_box.clear();
- v_box.clear();
-
  v_xi.clear();
  v_w.clear();
+ v_zdef.clear();
  v_alpha_var.clear();
 
  /* The bias of the primal is the only Variable of the SVMBlock that does not

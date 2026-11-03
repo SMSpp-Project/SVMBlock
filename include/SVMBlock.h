@@ -163,6 +163,31 @@ namespace SMSpp_di_unipi_it
  * also what a Solver ignoring the abstract representation, such as SMOSolver,
  * has to report.
  *
+ * <b>The dual with the weights.</b> For the linear kernel the Hessian of the
+ * dual is \f$ Q = Z Z^T \f$ (plus the diagonal of the squared loss), the
+ * rows of \f$ Z \f$ being \f$ s_k x_{ i(k) } \f$: its rank is at most the
+ * number \f$ m \f$ of features, hence it is singular as soon as
+ * \f$ N > m \f$, and a quadratic Solver that checks it for convexity can
+ * reject it on the rounding errors alone. The same problem is written with
+ * the \f$ m \f$ variables \f$ z = Z^T \alpha \f$ explicit:
+ * \f[
+ *   \max_{ \alpha , z } \quad - q^T \alpha
+ *     - \frac{ 1 }{ 2 rw } \| z - \lambda \|^2
+ *     - \frac{ p - 1 }{ 4C } \| \alpha \|^2
+ *   \quad , \quad z = Z^T \alpha
+ *   \quad , \quad 0 \leq \alpha_k \leq u
+ *   \quad , \quad [ \; s^T \alpha = \mu \; ]
+ * \f]
+ * where \f$ rw \f$, \f$ \lambda \f$ and \f$ \mu \f$ are the weight and
+ * the linear term of the regularisation, 1, 0 and 0 unless the SVMBlock is
+ * the chunk of a decomposition [see set_reg_weight() and set_linear_term()];
+ * if the bias is regularised the equality constraint is replaced by the
+ * variable \f$ t = s^T \alpha \f$ and the term
+ * \f$ - ( t - \mu )^2 / ( 2 rw ) \f$. The Hessian is now diagonal and the
+ * constraints have \f$ m \f$ (or \f$ m + 1 \f$) more rows, which are as
+ * sparse as the data; at an optimum \f$ ( z - \lambda ) / rw \f$ is the
+ * vector of the weights.
+ *
  * <b>The bias.</b> The equality constraint \f$ s^T \alpha = 0 \f$ of the dual
  * is the stationarity condition of the primal with respect to \f$ b \f$. If
  * the bias is *regularised*, i.e., it is appended to \f$ w \f$ and therefore
@@ -276,7 +301,8 @@ class SVMBlock : public Block
 
  enum svm_problem {
   kWolfeDual = 0 ,  ///< the Wolfe dual in the multipliers, any kernel
-  kPrimal = 1       ///< the training problem itself, linear kernel only
+  kPrimal = 1 ,     ///< the training problem itself, linear kernel only
+  kWDual = 2       ///< the Wolfe dual with the weights, linear kernel only
   };
 
 /*--------------------------------------------------------------------------*/
@@ -588,7 +614,13 @@ class SVMBlock : public Block
   * - kPrimal: three static Variable, the vector "w" of the m weights, the
   *   scalar "b" of the bias and the vector "xi" of the N slacks. Only
   *   admissible for the linear kernel, since no other one has an explicit
-  *   finite-dimensional feature map.
+  *   finite-dimensional feature map;
+  *
+  * - kWDual: the dynamic Variable "alpha" of the N multipliers, as in the
+  *   dual, the static vector "z" of the m products \f$ z = Z^T \alpha \f$
+  *   and, if the bias is regularised, the static scalar "t" of
+  *   \f$ s^T \alpha \f$ [see the general notes]. Only admissible for the
+  *   linear kernel, as the primal.
   *
   * All the Variable are continuous, and the bounds are Constraint rather than
   * being set into the Variable, see generate_abstract_constraints().
@@ -611,6 +643,12 @@ class SVMBlock : public Block
   * is regularised, the static FRowConstraint "eq" imposing
   * \f$ s^T \alpha = 0 \f$.
   *
+  * The dual with the weights has the same ones, plus the static group "zdef"
+  * of m FRowConstraint imposing \f$ z_j - \sum_k s_k x_{ i(k) j } \alpha_k
+  * = 0 \f$ (only the nonzero entries of the data, none for a feature that
+  * is not active) and, if the bias is regularised, the static FRowConstraint
+  * "tdef" imposing \f$ t - s^T \alpha = 0 \f$.
+  *
   * For the primal formulation these are the static group "xibox" of N
   * LB0Constraint imposing \f$ \xi_k \geq 0 \f$ and the static group "cons" of
   * N FRowConstraint imposing
@@ -626,8 +664,10 @@ class SVMBlock : public Block
  /** Generates the (minimisation) Objective of the formulation that
   * generate_abstract_variables() has generated, which must therefore have
   * been called beforehand: a QuadFunction for the dual, which is *maximised*,
-  * and a DQuadFunction for the primal, which is minimised. The Configuration
-  * is not used.
+  * a DQuadFunction for the dual with the weights, which is maximised as well,
+  * its terms being those of "z", then of "t" if any, then of "alpha", and a
+  * DQuadFunction for the primal, which is minimised. The Configuration is
+  * not used.
   *
   * Note that the Hessian of the dual is dense, so that generating it costs
   * \f$ O( N^2 ) \f$ time and memory; this is unavoidable for a Solver working
@@ -1005,6 +1045,8 @@ class SVMBlock : public Block
    return( -1 );
   if( AR & Consensus )
    return( kPrimal );
+  if( AR & WDualF )
+   return( kWDual );
   return( ( AR & PrimalF ) ? kPrimal : kWolfeDual );
   }
 
@@ -1467,6 +1509,29 @@ class SVMBlock : public Block
  void update_abstract_objective( ModParam issueAMod );
 
 /*--------------------------------------------------------------------------*/
+ /// the terms of the Objective of the dual with the weights
+ /** Writes in \p quad and \p lin the quadratic and the linear coefficients
+  * of the Objective of the dual with the weights, in the order of its terms
+  * [see generate_objective()]: those of "z", that of "t" if the bias is
+  * regularised, those of "alpha". */
+
+ void get_wdual_terms( doubleVec & quad , doubleVec & lin ) const;
+
+/*--------------------------------------------------------------------------*/
+ /// the coefficients of the multipliers k0 , ... in the rows z = Z^T alpha
+ /** Returns, for each feature j, the pairs ( variable , - s_k x_{ i(k) j } )
+  * of the multipliers pointed by \p pa, whose dual indices are k0 onwards,
+  * leaving out the zero ones and those of a feature that is not active. */
+
+ std::vector< std::vector< std::pair< ColVariable * , double > > >
+ weight_row_coeffs( const std::vector< ColVariable * > & pa , Index k0 ) const;
+
+/*--------------------------------------------------------------------------*/
+ /// generates the rows "zdef" and, if any, "tdef" of the dual with weights
+
+ void generate_weight_rows( void );
+
+/*--------------------------------------------------------------------------*/
  /// rebuilds the abstract representation, issuing a NBModification
  /** Destroys whatever part of the abstract representation is constructed and
   * generates it anew, of the same formulation, out of the current data of the
@@ -1690,11 +1755,13 @@ class SVMBlock : public Block
  std::list< LB0Constraint > v_box;        ///< the N bounds on them (dual)
  FRowConstraint f_eq;                     ///< the equality constraint (dual)
 
- std::vector< ColVariable > v_w;          ///< the m weights (primal)
- ColVariable f_b_var;                     ///< the bias (primal)
- std::list< ColVariable > v_xi;           ///< the N slacks (primal)
- std::list< LB0Constraint > v_xi_box;     ///< the N bounds on them (primal)
- std::list< FRowConstraint > v_cons;      ///< the N constraints (primal)
+ std::vector< ColVariable > v_w;        ///< the m weights (primal), or z
+ ColVariable f_b_var;                   ///< the bias (primal), or t
+ std::vector< FRowConstraint > v_zdef;  ///< z = Z^T alpha (dual, weights)
+ FRowConstraint f_tdef;                 ///< t = s^T alpha (dual, weights)
+ std::list< ColVariable > v_xi;         ///< the N slacks (primal)
+ std::list< LB0Constraint > v_xi_box;   ///< the N bounds on them (primal)
+ std::list< FRowConstraint > v_cons;    ///< the N constraints (primal)
 
  FRealObjective f_obj;                    ///< the objective
 
@@ -1709,12 +1776,15 @@ class SVMBlock : public Block
  static constexpr unsigned char PrimalF = 8;
  ///< fourth bit of AR == 1 if the encoded problem is the primal one
  static constexpr unsigned char Consensus = 16;
+ ///< fifth bit of AR == 1 if the structure is the consensus one
 
 /*--------------------------------------------------------------------------*/
  /// the abstract representation is that of the Benders structure
 
  static constexpr unsigned char Benders = 32;
- ///< fifth bit of AR == 1 if the structure is the consensus one
+ ///< sixth bit of AR == 1 if the structure is the Benders one
+ static constexpr unsigned char WDualF = 64;
+ ///< seventh bit of AR == 1 if the encoded problem is the dual with weights
 
 /*--------------------------------------------------------------------------*/
 
