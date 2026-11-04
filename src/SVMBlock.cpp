@@ -1866,7 +1866,8 @@ void SVMBlock::rebuild_abstract( ModParam issueMod )
    generate_objective();
   }
 
- if( issue_pmod( issueMod , Modification::eModPhys ) && anyone_there() )
+ // a NBModification is read by anyone, whatever they read
+ if( issue_pmod( issueMod , Modification::eModAll ) && anyone_there() )
   Block::add_Modification( std::make_shared< NBModification >( this ) ,
                            Observer::par2chnl( issueMod ) );
 

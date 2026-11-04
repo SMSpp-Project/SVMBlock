@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- the `NBModification` issued when the abstract representation is rebuilt
+  under `eNoBlck` also reaches whoever only reads the abstract
+  representation, and not only those who read `eModPhys`
+
 ## [0.4.0] - 2026-11-03
 
 ### Added
