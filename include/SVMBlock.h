@@ -1437,8 +1437,12 @@ class SVMBlock : public Block
   *   \quad , \quad
   *   \xi_k = \frac{ ( p - 1 ) \alpha_k }{ 2C }
   * \f]
-  * and the average over all the free support vectors is taken. If there is no
-  * free support vector, the bias is left unchanged. */
+  * and the average over all the free support vectors is taken, weighted by
+  * the distance of \f$ \alpha_k \f$ from its nearest bound, so that a
+  * multiplier that the solver leaves just off a bound counts for (almost)
+  * nothing. If there is no free support vector, each multiplier at a bound
+  * only bounds the bias from one side, and the bias is the middle of the
+  * interval they leave. */
 
  void compute_bias( void );
 

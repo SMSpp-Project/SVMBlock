@@ -3402,14 +3402,8 @@ void SVMBlock::compute_bias( void )
  const double lo = dBndEps * ( f_C > 1 ? f_C : 1 );
  const double hi = ( ub < Inf< double >() ) ? ub - lo : Inf< double >();
 
- double sum = 0;
- Index cnt = 0;
-
- for( Index k = 0 ; k < f_training_Results->v_alpha.size() ; ++k ) {
-  const double ak = f_training_Results->v_alpha[ k ];
-  if( ( ak <= lo ) || ( ak >= hi ) )  // not a free support vector
-   continue;
-
+ // the bias that puts the sample of dual index k on its margin
+ auto beta = [ & ]( Index k , double ak ) {
   const Index i = v_di[ k ];
   const std::size_t ii = std::size_t( i ) * f_n;
 
@@ -3423,12 +3417,61 @@ void SVMBlock::compute_bias( void )
    g -= lambda_x( v_lambda , get_x( i ) ) / f_reg_weight;
 
   const double xik = f_squared_loss ? ak / ( 2 * f_C ) : 0;
-  sum += v_ds[ k ] * ( - v_dq[ k ] - xik ) - g;
-  ++cnt;
+  return( v_ds[ k ] * ( - v_dq[ k ] - xik ) - g );
+  };
+
+ // every free support vector gives the same bias at an optimal solution;
+ // the average is weighted by the distance of the multiplier from its
+ // nearest bound, so that a multiplier that the solver leaves just off a
+ // bound (e.g., by 1e-7, as the methods of the augmented Lagrangian do), and
+ // which gives a wrong bias, counts for almost nothing
+ double sum = 0;
+ double wsum = 0;
+ const auto & alpha = f_training_Results->v_alpha;
+
+ for( Index k = 0 ; k < alpha.size() ; ++k ) {
+  const double ak = alpha[ k ];
+  if( ( ak <= lo ) || ( ak >= hi ) )  // not a free support vector
+   continue;
+
+  const double w = ( ub < Inf< double >() ) ? std::min( ak , ub - ak ) : ak;
+  sum += w * beta( k , ak );
+  wsum += w;
   }
 
- if( cnt )
-  f_training_Results->f_b = sum / cnt;
+ if( wsum > 0 ) {
+  f_training_Results->f_b = sum / wsum;
+  return;
+  }
+
+ /* No free support vector: each multiplier at a bound only says on which
+  * side of its beta the bias lies (on the side where the sample is beyond
+  * its margin if the multiplier is 0, before it if it is at the upper
+  * bound), and the bias is the middle of the interval they leave. */
+ double blo = - Inf< double >();
+ double bhi = Inf< double >();
+
+ for( Index k = 0 ; k < alpha.size() ; ++k ) {
+  const double ak = alpha[ k ];
+  const bool atlo = ( ak <= lo );
+  if( ( ! atlo ) && ( ak < hi ) )
+   continue;
+
+  const double bk = beta( k , ak );
+  if( atlo == ( v_ds[ k ] > 0 ) )
+   blo = std::max( blo , bk );
+  else
+   bhi = std::min( bhi , bk );
+  }
+
+ if( ( blo > - Inf< double >() ) && ( bhi < Inf< double >() ) )
+  f_training_Results->f_b = ( blo + bhi ) / 2;
+ else
+  if( blo > - Inf< double >() )
+   f_training_Results->f_b = blo;
+  else
+   if( bhi < Inf< double >() )
+    f_training_Results->f_b = bhi;
 
  }  // end( SVMBlock::compute_bias )
 

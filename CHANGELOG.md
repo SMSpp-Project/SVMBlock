@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- the bias of a dual solution of a QP solver was the plain average over the
+  multipliers more than 1e-8 off their bounds, which took as free support
+  vectors those left just off a bound by an augmented Lagrangian method
+  (ProxQP, 0.837 instead of 0.948 on fourclass with the Gaussian kernel);
+  the average is now weighted by the distance from the nearest bound, and
+  with no free support vector the bias is the middle of the interval that
+  the multipliers at a bound allow rather than the one of the last training
+
 - the `NBModification` issued when the abstract representation is rebuilt
   under `eNoBlck` also reaches whoever only reads the abstract
   representation, and not only those who read `eModPhys`
