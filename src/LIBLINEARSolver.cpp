@@ -212,8 +212,9 @@ Solution * LIBLINEARSolver::get_Solution( Configuration * solc )
  auto sol = dynamic_cast< SVMBlockSolution * >(
                                   f_SVM->get_Solution( & physical , true ) );
  if( ! sol )
-  throw( std::logic_error( "LIBLINEARSolver::get_Solution: the SVMBlock did not "
-                           "return a SVMBlockSolution" ) );
+  throw( std::logic_error(
+                "LIBLINEARSolver::get_Solution: the SVMBlock did not "
+                "return a SVMBlockSolution" ) );
 
  sol->set_primal_model( doubleVec( v_w ) , f_b );
 
