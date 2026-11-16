@@ -49,6 +49,8 @@ include(BuildType)
 option(SVMBlock_USE_LIBSVM "Whether SVMBlock will use LIBSVM or not." ON)
 option(SVMBlock_USE_LIBLINEAR
        "Whether SVMBlock will use LIBLINEAR or not." ON)
+option(SVMBlock_USE_HWLOC
+       "Whether svm_arch will read the memory of the machine by hwloc." ON)
 
 # ----- Requirements -------------------------------------------------------- #
 # If it's not being called by the umbrella, we need to
@@ -108,6 +110,18 @@ if (NOT CMAKE_CROSSCOMPILING)
     target_compile_features(svm_arch PRIVATE cxx_std_20)
     find_package(Threads REQUIRED)
     target_link_libraries(svm_arch PRIVATE Threads::Threads)
+
+    # The memory of the machine is read by hwloc, where it is found; without
+    # it SVMBlockArch.h leaves the memory to the default of SVMBlock.h.
+    if (SVMBlock_USE_HWLOC)
+        find_path(HWLOC_INCLUDE_DIR hwloc.h)
+        find_library(HWLOC_LIBRARY hwloc)
+        if (HWLOC_INCLUDE_DIR AND HWLOC_LIBRARY)
+            target_compile_definitions(svm_arch PRIVATE SVMBlock_USE_HWLOC)
+            target_include_directories(svm_arch PRIVATE ${HWLOC_INCLUDE_DIR})
+            target_link_libraries(svm_arch PRIVATE ${HWLOC_LIBRARY})
+        endif ()
+    endif ()
 
     add_custom_command(
             OUTPUT ${archHeader}

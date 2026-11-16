@@ -6,9 +6,10 @@
  * Measures the few properties of the machine that the defaults of SVMBlock
  * depend on, and writes them into the header SVMBlockArch.h, which is
  * generated at the first compilation and is therefore the machine's own: the
- * memory it has, how many cores it has, what one entry of a dense inner
- * product costs, what one entry of the merge of two lists of nonzeroes costs,
- * and what starting a thread costs. The rules that read them are in SVMBlock
+ * memory it has (by hwloc, when SVMBlock is built with it), how many cores
+ * it has, what one entry of a dense inner product costs, what one entry of
+ * the merge of two lists of nonzeroes costs, and what starting a thread
+ * costs. The rules that read them are in SVMBlock
  * [see SVMBlock::set_sparse_density(), set_K_memory() and get_K()], so that
  * what is measured here are the parameters of the architecture and not the
  * decisions themselves.
@@ -37,32 +38,31 @@
 #include <thread>
 #include <vector>
 
-#ifdef _WIN32
- #include <windows.h>
-#else
- #include <unistd.h>
+#ifdef SVMBlock_USE_HWLOC
+ #include <hwloc.h>
 #endif
 
 /*--------------------------------------------------------------------------*/
 /*------------------------------ FUNCTIONS ---------------------------------*/
 /*--------------------------------------------------------------------------*/
 /// how many bytes of memory the machine has, zero if it will not say
+/** The memory of the whole machine is that of the root of the topology of
+ * hwloc, which reads it from each system in its own way; without hwloc it
+ * is not known, and SVMBlockArch.h then leaves it to the default of
+ * SVMBlock.h. */
 
 static double total_memory( void )
 {
-#ifdef _WIN32
- MEMORYSTATUSEX st;
- st.dwLength = sizeof( st );
- if( GlobalMemoryStatusEx( & st ) )
-  return( double( st.ullTotalPhys ) );
- return( 0 );
-#else
- const long pages = sysconf( _SC_PHYS_PAGES );
- const long page = sysconf( _SC_PAGE_SIZE );
- if( ( pages > 0 ) && ( page > 0 ) )
-  return( double( pages ) * double( page ) );
- return( 0 );
+ double memory = 0;
+#ifdef SVMBlock_USE_HWLOC
+ hwloc_topology_t t;
+ if( hwloc_topology_init( & t ) == 0 ) {
+  if( hwloc_topology_load( t ) == 0 )
+   memory = double( hwloc_get_root_obj( t )->total_memory );
+  hwloc_topology_destroy( t );
+  }
 #endif
+ return( memory );
  }
 
 /*--------------------------------------------------------------------------*/
@@ -244,8 +244,11 @@ int main( int argc , char ** argv )
      << "-------------*/\n\n"
      << "#ifndef __SVMBlockArch\n"
      << " #define __SVMBlockArch\n\n"
-     << "/// bytes of memory the machine has\n"
-     << "#define SVMBlock_ARCH_MEMORY " << memory << "\n\n"
+     << ( memory > 0 ? "/// bytes of memory the machine has\n"
+                       "#define SVMBlock_ARCH_MEMORY "
+                     : "/// the bytes of memory of the machine are not "
+                       "known: those of SVMBlock.h\n// " )
+     << memory << "\n\n"
      << "/// cores the machine has\n"
      << "#define SVMBlock_ARCH_CORES " << cores << "\n\n"
      << "/// seconds one entry of a dense inner product takes\n"

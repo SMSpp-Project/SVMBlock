@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the one of `smspp_install_rpath()`, with no test on the system or on the
   compiler [see `SMSppModule.cmake` of SMS++]; CMake 3.24 or later is needed
 
+- `svm_arch` reads the memory of the machine by hwloc (the option
+  `SVMBlock_USE_HWLOC` of CMake, on where hwloc is found, and `SVMBkHWLOC`
+  of the makefile), with no branch of its own on the system; without hwloc
+  the memory is not known and `SVMBlockArch.h` leaves it to the default of
+  `SVMBlock.h`
+
+### Fixed
+
+- `SVMBlockArch.h` defined the memory of the machine as 0 when the system
+  did not give it, which made every kernel matrix too large to keep
+
 ## [0.5.0] - 2026-11-16
 
 ### Fixed

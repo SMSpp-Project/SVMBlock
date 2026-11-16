@@ -59,9 +59,16 @@ clean::
 # the properties of the machine, measured once at the first compilation and
 # written into a header that is not part of the sources - - - - - - - - - - -
 
+# the memory of the machine by hwloc, where a program that loads its topology
+# compiles and links, unless SVMBkHWLOC is set to 0
+SVMBkHWLOC ?= $(shell printf '\043include <hwloc.h>\nint main(){\
+	hwloc_topology_t t;return hwloc_topology_init(&t);}\n' | \
+	$(CC) -x c++ - -o /dev/null -lhwloc 2>/dev/null && echo 1)
+
 $(SVMBkSDR)/include/SVMBlockArch.h: $(SVMBkSDR)/tools/svm_arch.cpp
 	$(CC) $(SVMBkSDR)/tools/svm_arch.cpp -o $(SVMBkSDR)/tools/svm_arch \
-	$(SW) -pthread
+	$(SW) -pthread $(if $(filter 1,$(SVMBkHWLOC)),\
+	-DSVMBlock_USE_HWLOC -lhwloc)
 	$(SVMBkSDR)/tools/svm_arch $(SVMBkSDR)/include
 
 # dependencies: every .o from its .cpp + every recursively included .h- - - -
