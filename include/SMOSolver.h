@@ -807,7 +807,8 @@ class SMOSolver : public Solver
  Index f_Rupd = 0;       ///< rank-one updates since it was computed
 
  bool f_rmvd = false;    ///< true if samples have been removed, not only added
- bool f_optimal = false; ///< true if the last call to compute() found the optimum
+ bool f_optimal = false; ///< true if the last call to compute() found the
+                         ///< optimum
 
  const double * f_ds = nullptr;     ///< shortcut to v_s.data()
  const double * f_dq = nullptr;     ///< shortcut to v_q.data()
