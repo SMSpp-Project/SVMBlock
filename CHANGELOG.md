@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- the installed module `smspp.svmblock` could not be imported, since its
+  package gave the interface of the module the target of the library by its
+  name in the build tree, which an installed package does not have
+
 - the bias of a dual solution of a QP solver was the plain average over the
   multipliers more than 1e-8 off their bounds, which took as free support
   vectors those left just off a bound by an augmented Lagrangian method
