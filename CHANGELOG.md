@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-16
+
 ### Fixed
 
 - the installed module `smspp.svmblock` could not be imported, since its
@@ -389,7 +391,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - the package configuration file finds the libraries the module links, so that
   a project using the installed module needs nothing more than find_package()
 
-[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.4.0...develop
+[Unreleased]: https://gitlab.com/smspp/svmblock/-/compare/0.5.0...develop
+[0.5.0]: https://gitlab.com/smspp/svmblock/-/compare/0.4.0...0.5.0
 [0.4.0]: https://gitlab.com/smspp/svmblock/-/compare/0.3.0...0.4.0
 [0.3.0]: https://gitlab.com/smspp/svmblock/-/compare/0.2.0...0.3.0
 [0.2.0]: https://gitlab.com/smspp/svmblock/-/compare/0.1.0...0.2.0
