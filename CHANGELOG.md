@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the memory is not known and `SVMBlockArch.h` leaves it to the default of
   `SVMBlock.h`
 
+- `FindLIBSVM.cmake` and `FindLIBLINEAR.cmake` look for the library, its
+  debug build and its DLL in the same places on every system, and make the
+  imported target a DLL with its import library where they find the DLL,
+  rather than choosing by the system
+
 ### Fixed
 
 - `SVMBlockArch.h` defined the memory of the machine as 0 when the system

@@ -11,7 +11,7 @@
 #        LIBSVM_FOUND         - True if headers are found                     #
 #        LIBSVM_INCLUDE_DIRS  - Include directories                           #
 #        LIBSVM_LIBRARIES     - Libraries to be linked                        #
-#        LIBSVM_DLL           - The found runtime DLL (Windows only)          #
+#        LIBSVM_DLL           - The runtime DLL, where there is one           #
 #        LIBSVM_VERSION       - Version number                                #
 #                                                                             #
 #    This module reads hints about search locations from variables:           #
@@ -60,15 +60,8 @@ if (NOT "${LIBSVM_INCLUDE_DIR}" STREQUAL
 endif ()
 
 # Check if already in cache
-if (WIN32)
-    if (LIBSVM_INCLUDE_DIR AND LIBSVM_LIBRARY AND LIBSVM_LIBRARY_DEBUG
-            AND LIBSVM_DLL AND LIBSVM_VERSION)
-        set(LIBSVM_FOUND TRUE)
-    endif ()
-else ()
-    if (LIBSVM_INCLUDE_DIR AND LIBSVM_LIBRARY AND LIBSVM_VERSION)
-        set(LIBSVM_FOUND TRUE)
-    endif ()
+if (LIBSVM_INCLUDE_DIR AND LIBSVM_LIBRARY AND LIBSVM_VERSION)
+    set(LIBSVM_FOUND TRUE)
 endif ()
 
 if (NOT LIBSVM_FOUND)
@@ -85,61 +78,47 @@ if (NOT LIBSVM_FOUND)
             DOC "LIBSVM include directory.")
 
     # ----- Find the LIBSVM library ----------------------------------------- #
-    if (UNIX)
-        find_library(LIBSVM_LIBRARY
-                NAMES svm
-                PATHS ${LIBSVM_ROOT}/lib
-                DOC "LIBSVM library.")
+    # the release library, then the debug one where a distribution has it
+    # (vcpkg), else the release one; the runtime DLL where the library is
+    # one (Windows), which the imported target then carries; the places that
+    # a system does not have are simply not there
+    find_library(LIBSVM_LIBRARY
+            NAMES svm libsvm
+            HINTS ${LIBSVM_ROOT} ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}
+                  $ENV{LIBRARY_PREFIX}
+            PATH_SUFFIXES lib
+            DOC "LIBSVM library.")
 
+    find_library(LIBSVM_LIBRARY_DEBUG
+            NAMES svm libsvm
+            HINTS ${LIBSVM_ROOT}/debug
+                  ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug
+            PATH_SUFFIXES lib
+            NO_DEFAULT_PATH
+            DOC "LIBSVM debug library.")
+    if (NOT LIBSVM_LIBRARY_DEBUG)
         set(LIBSVM_LIBRARY_DEBUG ${LIBSVM_LIBRARY}
                 CACHE FILEPATH "LIBSVM debug library." FORCE)
-    elseif (WIN32)
-        find_library(LIBSVM_LIBRARY
-                NAMES svm libsvm
-                PATHS
-                ${LIBSVM_ROOT}/lib
-                ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib
-                $ENV{LIBRARY_LIB}
-                NO_DEFAULT_PATH
-                DOC "LIBSVM library.")
+    endif ()
 
-        find_library(LIBSVM_LIBRARY_DEBUG
-                NAMES svm libsvm
-                PATHS
-                ${LIBSVM_ROOT}/debug/lib
-                ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib
-                NO_DEFAULT_PATH
-                DOC "LIBSVM debug library.")
+    find_file(LIBSVM_DLL
+            NAMES svm.dll libsvm.dll
+            HINTS ${LIBSVM_ROOT} ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}
+                  $ENV{LIBRARY_PREFIX}
+            PATH_SUFFIXES bin
+            NO_DEFAULT_PATH
+            DOC "LIBSVM runtime DLL.")
 
-        # Release-only distributions ship no debug build: fall back to the
-        # release library so that a Release configure succeeds.
-        if (NOT LIBSVM_LIBRARY_DEBUG)
-            set(LIBSVM_LIBRARY_DEBUG ${LIBSVM_LIBRARY}
-                    CACHE FILEPATH "LIBSVM debug library." FORCE)
-        endif ()
-
-        # ----- Find the LIBSVM runtime DLL on Windows ---------------------- #
-        find_file(LIBSVM_DLL
-                NAMES svm.dll libsvm.dll
-                PATHS
-                ${LIBSVM_ROOT}/bin
-                ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin
-                $ENV{LIBRARY_BIN}
-                NO_DEFAULT_PATH
-                DOC "LIBSVM runtime DLL.")
-
-        find_file(LIBSVM_DLL_DEBUG
-                NAMES svm.dll libsvm.dll
-                PATHS
-                ${LIBSVM_ROOT}/debug/bin
-                ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin
-                NO_DEFAULT_PATH
-                DOC "LIBSVM debug runtime DLL.")
-
-        if (NOT LIBSVM_DLL_DEBUG AND LIBSVM_DLL)
-            set(LIBSVM_DLL_DEBUG ${LIBSVM_DLL}
-                    CACHE FILEPATH "LIBSVM debug runtime DLL." FORCE)
-        endif ()
+    find_file(LIBSVM_DLL_DEBUG
+            NAMES svm.dll libsvm.dll
+            HINTS ${LIBSVM_ROOT}/debug
+                  ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug
+            PATH_SUFFIXES bin
+            NO_DEFAULT_PATH
+            DOC "LIBSVM debug runtime DLL.")
+    if (NOT LIBSVM_DLL_DEBUG AND LIBSVM_DLL)
+        set(LIBSVM_DLL_DEBUG ${LIBSVM_DLL}
+                CACHE FILEPATH "LIBSVM debug runtime DLL." FORCE)
     endif ()
 
     # ----- Parse the version ----------------------------------------------- #
@@ -170,19 +149,10 @@ if (NOT LIBSVM_FOUND)
     # The following macro manages the QUIET, REQUIRED and version-related
     # options passed to find_package(). It also sets <PackageName>_FOUND if
     # REQUIRED_VARS are set.
-    if (WIN32)
-        # The debug library/DLL are optional (they fall back to the release
-        # ones above), so they are deliberately kept out of REQUIRED_VARS.
-        find_package_handle_standard_args(
-                LIBSVM
-                REQUIRED_VARS LIBSVM_LIBRARY LIBSVM_DLL LIBSVM_INCLUDE_DIR
-                VERSION_VAR LIBSVM_VERSION)
-    else ()
-        find_package_handle_standard_args(
-                LIBSVM
-                REQUIRED_VARS LIBSVM_LIBRARY LIBSVM_INCLUDE_DIR
-                VERSION_VAR LIBSVM_VERSION)
-    endif ()
+    find_package_handle_standard_args(
+            LIBSVM
+            REQUIRED_VARS LIBSVM_LIBRARY LIBSVM_INCLUDE_DIR
+            VERSION_VAR LIBSVM_VERSION)
 endif ()
 
 # A found package keeps its version in the cache, with the include
@@ -200,7 +170,8 @@ if (LIBSVM_FOUND)
     set(LIBSVM_LIBRARIES ${LIBSVM_LIBRARY})
 
     if (NOT TARGET LIBSVM::LIBSVM)
-        if (WIN32)
+        # a DLL with its import library, or a library linked as it is
+        if (LIBSVM_DLL)
             add_library(LIBSVM::LIBSVM SHARED IMPORTED)
             set_target_properties(
                     LIBSVM::LIBSVM PROPERTIES
