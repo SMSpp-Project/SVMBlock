@@ -1903,7 +1903,7 @@ double SVMBlock::get_gamma( void ) const
 
  const Index ma = get_NActiveFeatures();
 
- if( f_gamma == dGammaScale ) {
+ if( f_gamma == double( dGammaScale ) ) {
   /* 1 / ( m * Var( X ) ), with the variance taken over all the entries of
    * the data set, save that the entries of an inactive feature are none of
    * the kernel's business and are therefore left out of both. */

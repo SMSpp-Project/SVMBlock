@@ -117,7 +117,7 @@ int LIBLINEARSolver::compute( bool changedvars )
   throw( std::logic_error( "LIBLINEARSolver::compute: no SVMBlock is set" ) );
 
  if( f_solved && ( ! f_dirty ) )   // nothing has changed since the last
-  return( f_capped ? kLowPrecision : kOK );          // call: nothing to do
+  return( f_capped ? int( kLowPrecision ) : int( kOK ) );          // call: nothing to do
 
  lock();  // lock the mutex
 
@@ -174,7 +174,7 @@ int LIBLINEARSolver::compute( bool changedvars )
 
  unlock();  // unlock the mutex
 
- return( f_capped ? kLowPrecision : kOK );
+ return( f_capped ? int( kLowPrecision ) : int( kOK ) );
 
  }  // end( LIBLINEARSolver::compute )
 

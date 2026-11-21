@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `SVMBlockArch.h` defined the memory of the machine as 0 when the system
   did not give it, which made every kernel matrix too large to keep
+- `LIBLINEARSolver` gives the status of a capped solve with no conditional
+  between two enumerations, and `SVMBlock` compares its gamma with the value
+  of `dGammaScale` and not with the enumeration
 
 ## [0.5.0] - 2026-11-16
 
