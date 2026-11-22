@@ -56,4 +56,8 @@ SVMBkINC := $(SVMBkINC) $(libLIBSVMINC) $(libLIBLINEARINC) $(SMS++INC)
 # external libraries for SVMBlock
 SVMBkLIB = $(libLIBSVMLIB) $(libLIBLINEARLIB) $(SMS++LIB)
 
+# the objects as the shared libraries of the module and of those whose
+# objects it takes [see SMS++/lib/makefile-shared]
+$(eval $(call SMSppSOlib,SVMBk))
+
 ############################ End of makefile #################################
