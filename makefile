@@ -15,6 +15,11 @@
 #           $(SMS++OBJ)  = the libSMS++ library itself                       #
 #           $(SVMBkSDR)  = the directory where the source is                 #
 #                                                                            #
+#   LIBSVM and LIBLINEAR are found through $(LIBSVM_ROOT) and                #
+#   $(LIBLINEAR_ROOT), set in extlib/makefile-default-paths-* (overridable   #
+#   via extlib/makefile-paths): LIBSVMSolver is built if LIBSVM is there,    #
+#   LIBLINEARSolver if LIBLINEAR is, and the rest always.                    #
+#                                                                            #
 #   Output: $(SVMBkOBJ)  = the final object(s) / library                     #
 #           $(SVMBkH)    = the .h files to include                           #
 #           $(SVMBkINC)  = the -I$( source directory )                       #
@@ -25,14 +30,21 @@
 #                                                                            #
 ##############################################################################
 
+include $(SVMBkSDR)/../extlib/makefile-libLIBSVM
+include $(SVMBkSDR)/../extlib/makefile-libLIBLINEAR
+
+# whether LIBSVM and LIBLINEAR are there, by their headers
+SVMBkLIBSVM := $(wildcard $(libLIBSVMBSCDIR)/include/libsvm/svm.h \
+	$(libLIBSVMBSCDIR)/include/svm.h)
+SVMBkLIBLINEAR := $(wildcard $(libLIBLINEARBSCDIR)/include/linear.h \
+	$(libLIBLINEARBSCDIR)/include/liblinear/linear.h)
+
 # macros to be exported - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 SVMBkOBJ = $(SVMBkSDR)/obj/SVMBlock.o \
 	$(SVMBkSDR)/obj/SVCBlock.o \
 	$(SVMBkSDR)/obj/SVRBlock.o \
-	$(SVMBkSDR)/obj/SMOSolver.o \
-	$(SVMBkSDR)/obj/LIBSVMSolver.o \
-	$(SVMBkSDR)/obj/LIBLINEARSolver.o
+	$(SVMBkSDR)/obj/SMOSolver.o
 
 SVMBkINC = -I$(SVMBkSDR)/include
 
@@ -40,9 +52,23 @@ SVMBkH   = $(SVMBkSDR)/include/SVMBlock.h \
 	$(SVMBkSDR)/include/SVCBlock.h \
 	$(SVMBkSDR)/include/SVRBlock.h \
 	$(SVMBkSDR)/include/SMOSolver.h \
-	$(SVMBkSDR)/include/LIBSVMSolver.h \
-	$(SVMBkSDR)/include/LIBLINEARSolver.h \
 	$(SVMBkSDR)/include/SVMBlockArch.h
+
+SVMBkLIB =
+
+ifneq ($(SVMBkLIBSVM),)
+SVMBkOBJ += $(SVMBkSDR)/obj/LIBSVMSolver.o
+SVMBkH += $(SVMBkSDR)/include/LIBSVMSolver.h
+SVMBkINC += $(libLIBSVMINC)
+SVMBkLIB += $(libLIBSVMLIB)
+endif
+
+ifneq ($(SVMBkLIBLINEAR),)
+SVMBkOBJ += $(SVMBkSDR)/obj/LIBLINEARSolver.o
+SVMBkH += $(SVMBkSDR)/include/LIBLINEARSolver.h
+SVMBkINC += $(libLIBLINEARINC)
+SVMBkLIB += $(libLIBLINEARLIB)
+endif
 
 # the C++20 module smspp.svmblock - - - - - - - - - - - - - - - - - - - - - -
 # [see makefile-mod of SMS++]
@@ -102,13 +128,13 @@ $(SVMBkSDR)/obj/LIBSVMSolver.o: $(SVMBkSDR)/src/LIBSVMSolver.cpp \
 	$(SVMBkSDR)/include/SVRBlock.h $(SVMBkSDR)/include/SVMBlock.h \
 	$(SVMBkSDR)/include/SVMBlockArch.h $(SMS++H) $(SMS++OBJ)
 	$(CC) -c $(SVMBkSDR)/src/LIBSVMSolver.cpp -o $@ \
-	$(SVMBkINC) $(libLIBSVMINC) $(SMS++INC) $(SW)
+	$(SVMBkINC) $(SMS++INC) $(SW)
 
 $(SVMBkSDR)/obj/LIBLINEARSolver.o: $(SVMBkSDR)/src/LIBLINEARSolver.cpp \
 	$(SVMBkSDR)/include/LIBLINEARSolver.h $(SVMBkSDR)/include/SVCBlock.h \
 	$(SVMBkSDR)/include/SVRBlock.h $(SVMBkSDR)/include/SVMBlock.h \
 	$(SVMBkSDR)/include/SVMBlockArch.h $(SMS++H) $(SMS++OBJ)
 	$(CC) -c $(SVMBkSDR)/src/LIBLINEARSolver.cpp -o $@ \
-	$(SVMBkINC) $(libLIBLINEARINC) $(SMS++INC) $(SW)
+	$(SVMBkINC) $(SMS++INC) $(SW)
 
 ########################## End of makefile ###################################

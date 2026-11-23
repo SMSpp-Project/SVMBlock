@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- the makefiles build `LIBSVMSolver` and `LIBLINEARSolver` only when the
+  headers of LIBSVM and LIBLINEAR are found, as CMake does, and the rest of
+  the module always
+
 - the makefiles give the shared library of the module by default, a DLL on
   Windows, as CMake does, and its objects with `SMSppSTATIC` [see
   `lib/makefile-shared` of SMS++]
